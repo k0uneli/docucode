@@ -19,8 +19,11 @@ use fltk::{
 use fltk::dialog::file_chooser;
 use fltk::image::RgbImage;
 
-use image::{DynamicImage, GenericImageView, ImageBuffer, ImageError, ImageResult, Rgba};
-use image::ImageReader;
+use image::{DynamicImage, GenericImageView, ImageBuffer, ImageResult, Rgba};
+use image::io::Reader as ImageReader;
+
+use imageproc::drawing::draw_text_mut;
+use rusttype::{Font, Scale};
 
 fn main() {
     let app = app::App::default();
@@ -107,7 +110,7 @@ fn main() {
     }
 
     // -------------------------------
-    // Barcode button
+    // Barcode button – uses barcode.ttf, top-right, small
     // -------------------------------
     {
         let mut img_frame = img_frame.clone();
@@ -117,14 +120,22 @@ fn main() {
         barcode_btn.set_callback(move |_| {
             // Build barcode contents: *EN-MP<textbox>*
             let user_text = text_input.value();
-            let trimmed = user_text.trim();
-            let barcode_text = format!("*EN-MP{}*", trimmed);
+            let barcode_text = format!("*EN-MP{}*", user_text.trim());
+
+            // Load barcode font
+            let font = match load_barcode_font("barcode.ttf") {
+                Some(f) => f,
+                None => {
+                    dialog::message_default("Could not load barcode.ttf");
+                    return;
+                }
+            };
 
             // Mutate current image
             let had_image = {
                 let mut opt = img_state.borrow_mut();
                 if let Some(ref mut img) = *opt {
-                    add_dummy_barcode(img, &barcode_text);
+                    add_barcode_with_font(img, &barcode_text, &font);
                     true
                 } else {
                     false
@@ -248,30 +259,49 @@ fn redraw_image(frame: &mut Frame, img: &DynamicImage) {
     }
 }
 
-/// Draw simple vertical-stripe barcode at bottom of image.
-/// `barcode_text` is of the form "*EN-MP<textbox contents>*".
-fn add_dummy_barcode(img: &mut DynamicImage, barcode_text: &str) {
-    // For now we just log the content; drawing is a simple stripe pattern.
-    eprintln!("Adding barcode with contents: {}", barcode_text);
+/// Load the barcode font from disk.
+fn load_barcode_font(path: &str) -> Option<Font<'static>> {
+    let data = fs::read(path).ok()?;
+    // try_from_vec leaks the data internally so the Font can live 'static
+    Font::try_from_vec(data)
+}
 
+/// Draw barcode text in the top-right corner, as small as is reasonable.
+fn add_barcode_with_font(img: &mut DynamicImage, barcode_text: &str, font: &Font<'static>) {
     let mut buf: ImageBuffer<Rgba<u8>, Vec<u8>> = img.to_rgba8();
     let (w, h) = buf.dimensions();
 
-    let bar_height = 80u32.min(h.saturating_sub(1));
-    let start_y = h - bar_height;
+    // Small font: based on image height, but with a low cap
+    let target_height = ((h as f32) / 20.0).max(10.0); // ~5% of height, minimum 10px
+    let scale = Scale {
+        x: target_height,
+        y: target_height,
+    };
 
-    // Stripe pattern: 4px black, 4px white, repeat
-    for x in 0..w {
-        let is_black = ((x / 4) % 2) == 0;
-        let color = if is_black {
-            Rgba([0, 0, 0, 255])
-        } else {
-            Rgba([255, 255, 255, 255])
-        };
-        for y in start_y..h {
-            buf.put_pixel(x, y, color);
-        }
-    }
+    // Compute text width
+    let v_metrics = font.v_metrics(scale);
+    let glyphs = font.layout(barcode_text, scale, rusttype::point(0.0, 0.0));
+    let text_width: i32 = glyphs
+        .clone()
+        .filter_map(|g| g.pixel_bounding_box())
+        .map(|bb| bb.max.x)
+        .max()
+        .unwrap_or(0);
+
+    let margin = 5i32;
+
+    let x = (w as i32 - text_width - margin).max(0);
+    let y = (margin as f32 + v_metrics.ascent) as i32; // near top
+
+    draw_text_mut(
+        &mut buf,
+        Rgba([0, 0, 0, 255]),
+        x,
+        y,
+        scale,
+        font,
+        barcode_text,
+    );
 
     *img = DynamicImage::ImageRgba8(buf);
 }
