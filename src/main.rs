@@ -4,6 +4,8 @@ use std::io;
 use std::path::Path;
 use std::rc::Rc;
 
+use fltk::dialog::file_chooser;
+use fltk::image::RgbImage;
 use fltk::{
     app,
     browser::HoldBrowser,
@@ -16,19 +18,23 @@ use fltk::{
     prelude::*,
     window::Window,
 };
-use fltk::dialog::file_chooser;
-use fltk::image::RgbImage;
 
-use image::{DynamicImage, GenericImageView, ImageBuffer, ImageResult, Rgba};
+use image::ImageFormat;
 use image::io::Reader as ImageReader;
-
+use image::{DynamicImage, ImageBuffer, ImageResult, Rgba}; // image 0.24 API
 use imageproc::drawing::draw_text_mut;
 use rusttype::{Font, Scale};
+
+struct ImgState {
+    original: Option<DynamicImage>, // pristine image when file was first loaded
+    current: Option<DynamicImage>,  // possibly barcoded version
+    path: Option<String>,           // current file path on disk
+}
 
 fn main() {
     let app = app::App::default();
 
-    let mut win = Window::new(100, 100, 900, 700, "TIFF Viewer + Barcode + List + Text");
+    let mut win = Window::new(100, 100, 900, 700, "TIFF Viewer + Barcode + Undo");
 
     let mut vpack = Pack::new(10, 10, 880, 680, "");
     vpack.set_spacing(10);
@@ -41,6 +47,7 @@ fn main() {
 
     let mut open_btn = Button::new(0, 0, 200, 40, "Open TIFF…");
     let mut barcode_btn = Button::new(0, 0, 200, 40, "Add Barcode");
+    let mut undo_btn = Button::new(0, 0, 200, 40, "Undo");
 
     btn_row.end();
 
@@ -85,22 +92,30 @@ fn main() {
     }
 
     // Shared image state
-    let current_image: Rc<RefCell<Option<DynamicImage>>> = Rc::new(RefCell::new(None));
+    let img_state = Rc::new(RefCell::new(ImgState {
+        original: None,
+        current: None,
+        path: None,
+    }));
 
     // -------------------------------
     // Open TIFF button (manual chooser)
     // -------------------------------
     {
         let mut img_frame = img_frame.clone();
-        let img_state = current_image.clone();
+        let img_state = img_state.clone();
 
         open_btn.set_callback(move |_| {
             if let Some(path) = file_chooser("Select TIFF", "*.tif\t*.tiff", ".", false) {
                 match load_image(&path) {
                     Ok(img) => {
-                        *img_state.borrow_mut() = Some(img.to_rgba8().into());
-                        if let Some(ref img) = *img_state.borrow() {
-                            redraw_image(&mut img_frame, img);
+                        let mut st = img_state.borrow_mut();
+                        st.original = Some(img.to_rgba8().into());
+                        st.current = st.original.clone();
+                        st.path = Some(path.clone());
+
+                        if let Some(ref cur) = st.current {
+                            redraw_image(&mut img_frame, cur);
                         }
                     }
                     Err(e) => dialog::message_default(&format!("Failed to load image:\n{e}")),
@@ -110,11 +125,11 @@ fn main() {
     }
 
     // -------------------------------
-    // Barcode button – uses barcode.ttf, top-right, small
+    // Barcode button – add + overwrite file
     // -------------------------------
     {
         let mut img_frame = img_frame.clone();
-        let img_state = current_image.clone();
+        let img_state = img_state.clone();
         let text_input = text_input.clone();
 
         barcode_btn.set_callback(move |_| {
@@ -131,25 +146,74 @@ fn main() {
                 }
             };
 
-            // Mutate current image
-            let had_image = {
-                let mut opt = img_state.borrow_mut();
-                if let Some(ref mut img) = *opt {
+            // Mutate current image in-place
+            let mut need_save_path: Option<String> = None;
+            {
+                let mut st = img_state.borrow_mut();
+                if let Some(ref mut img) = st.current {
                     add_barcode_with_font(img, &barcode_text, &font);
-                    true
+                    if let Some(ref p) = st.path {
+                        need_save_path = Some(p.clone());
+                    }
                 } else {
-                    false
+                    dialog::message_default("Open or select an image first!");
+                    return;
                 }
-            };
-
-            if !had_image {
-                dialog::message_default("Open or select an image first!");
-                return;
             }
 
-            // Redisplay
-            if let Some(ref img) = *img_state.borrow() {
-                redraw_image(&mut img_frame, img);
+            // Overwrite file on disk with barcoded version
+            if let Some(path) = need_save_path {
+                let st = img_state.borrow();
+                if let Some(ref img) = st.current {
+                    if let Err(e) = save_tiff_gray(img, &path) {
+                        dialog::message_default(&format!("Failed to save barcoded image:\n{e}"));
+                    }
+                    // Redisplay
+                    redraw_image(&mut img_frame, img);
+                }
+            }
+        });
+    }
+
+    // -------------------------------
+    // Undo button – restore original + overwrite file
+    // -------------------------------
+    {
+        let mut img_frame = img_frame.clone();
+        let img_state = img_state.clone();
+
+        undo_btn.set_callback(move |_| {
+            // We'll compute this inside the borrow and use it after.
+            let path_to_save: Option<String>;
+            let current_image: Option<DynamicImage>;
+
+            {
+                let mut st = img_state.borrow_mut();
+
+                // Check we actually have something to undo
+                if st.original.is_none() || st.path.is_none() {
+                    dialog::message_default("Nothing to undo.");
+                    return;
+                }
+
+                // Clone out of the state while we still hold the mutable borrow
+                let orig = st.original.as_ref().unwrap().clone();
+                let path = st.path.as_ref().unwrap().clone();
+
+                // Update current in the state
+                st.current = Some(orig.clone());
+
+                // Prepare data for use after we drop `st`
+                path_to_save = Some(path);
+                current_image = Some(orig);
+            } // <- `st` borrow ends here
+
+            // Now we can use the cloned values without any borrows in the way
+            if let (Some(path), Some(img)) = (path_to_save, current_image) {
+                if let Err(e) = save_tiff_gray(&img, &path) {
+                    dialog::message_default(&format!("Failed to restore original image:\n{e}"));
+                }
+                redraw_image(&mut img_frame, &img);
             }
         });
     }
@@ -159,7 +223,7 @@ fn main() {
     // -------------------------------
     {
         let mut img_frame = img_frame.clone();
-        let img_state = current_image.clone();
+        let img_state = img_state.clone();
         let image_dir = image_dir.clone();
 
         file_list.set_callback(move |b| {
@@ -171,9 +235,13 @@ fn main() {
                 let full_path = format!("{}/{}", image_dir, filename);
                 match load_image(&full_path) {
                     Ok(img) => {
-                        *img_state.borrow_mut() = Some(img.to_rgba8().into());
-                        if let Some(ref img) = *img_state.borrow() {
-                            redraw_image(&mut img_frame, img);
+                        let mut st = img_state.borrow_mut();
+                        st.original = Some(img.to_rgba8().into());
+                        st.current = st.original.clone();
+                        st.path = Some(full_path.clone());
+
+                        if let Some(ref cur) = st.current {
+                            redraw_image(&mut img_frame, cur);
                         }
                     }
                     Err(e) => dialog::message_default(&format!("Failed to load image:\n{e}")),
@@ -248,11 +316,7 @@ fn dynamic_to_fltk(img: &DynamicImage) -> Option<RgbImage> {
 /// Resize image to frame size and display it.
 fn redraw_image(frame: &mut Frame, img: &DynamicImage) {
     let (fw, fh) = (frame.w(), frame.h());
-    let resized = img.resize_to_fill(
-        fw as u32,
-        fh as u32,
-        image::imageops::FilterType::Nearest,
-    );
+    let resized = img.resize_to_fill(fw as u32, fh as u32, image::imageops::FilterType::Nearest);
     if let Some(rgb) = dynamic_to_fltk(&resized) {
         frame.set_image(Some(rgb));
         frame.redraw();
@@ -262,7 +326,6 @@ fn redraw_image(frame: &mut Frame, img: &DynamicImage) {
 /// Load the barcode font from disk.
 fn load_barcode_font(path: &str) -> Option<Font<'static>> {
     let data = fs::read(path).ok()?;
-    // try_from_vec leaks the data internally so the Font can live 'static
     Font::try_from_vec(data)
 }
 
@@ -272,7 +335,7 @@ fn add_barcode_with_font(img: &mut DynamicImage, barcode_text: &str, font: &Font
     let (w, h) = buf.dimensions();
 
     // Small font: based on image height, but with a low cap
-    let target_height = ((h as f32) / 20.0).max(10.0); // ~5% of height, minimum 10px
+    let target_height = ((h as f32) / 20.0).max(25.0); // ~5% of height, minimum 25px
     let scale = Scale {
         x: target_height,
         y: target_height,
@@ -290,8 +353,8 @@ fn add_barcode_with_font(img: &mut DynamicImage, barcode_text: &str, font: &Font
 
     let margin = 5i32;
 
-    let x = (w as i32 - text_width - margin).max(0);
-    let y = (margin as f32 + v_metrics.ascent) as i32; // near top
+    let x = (w as i32 - text_width).max(0);
+    let y = 0; // near top
 
     draw_text_mut(
         &mut buf,
@@ -304,4 +367,19 @@ fn add_barcode_with_font(img: &mut DynamicImage, barcode_text: &str, font: &Font
     );
 
     *img = DynamicImage::ImageRgba8(buf);
+}
+
+fn save_tiff_gray(img: &DynamicImage, path: &str) -> ImageResult<()> {
+    use std::fs::File;
+    use std::io::BufWriter;
+
+    // Convert to 8-bit grayscale to reduce size
+    let gray = img.to_luma8();
+    let dyn_gray = DynamicImage::ImageLuma8(gray);
+
+    let file = File::create(path)?;
+    let mut writer = BufWriter::new(file);
+
+    // Let `image` encode a grayscale TIFF with its default comould i use the fax compressionpression
+    dyn_gray.write_to(&mut writer, ImageFormat::Tiff)
 }

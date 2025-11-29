@@ -149,6 +149,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef8ae57c4978a2acd8b869ce6b9ca1dfe817bff704c220209fdef2c0b75a01b9"
 
 [[package]]
+name = "docucode"
+version = "0.2.0"
+dependencies = [
+ "fltk",
+ "image",
+ "imageproc",
+ "rusttype",
+]
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -520,16 +530,6 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
-]
-
-[[package]]
-name = "rustgui"
-version = "0.2.0"
-dependencies = [
- "fltk",
- "image",
- "imageproc",
- "rusttype",
 ]
 
 [[package]]
