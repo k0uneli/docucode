@@ -18,6 +18,7 @@ use fltk::{
     prelude::*,
     window::Window,
 };
+use fltk::button::RadioButton;
 
 use image::ImageFormat;
 use image::io::Reader as ImageReader;
@@ -50,6 +51,26 @@ fn main() {
     let mut undo_btn = Button::new(0, 0, 200, 40, "Undo");
 
     btn_row.end();
+    
+    let labels = ["1", "2", "3", "4", "5", "6", "7", "10"];
+    //Radio buttons for selecting doc category
+
+    let mut radio_pack = Pack::new(0, 0, 880, 40, "");
+    radio_pack.set_type(PackType::Horizontal);
+    radio_pack.set_spacing(10);
+
+    // Make 8 radios
+    let mut radios: Vec<RadioButton> = labels
+        .iter()
+        .map(|label| {
+            let mut r = RadioButton::new(0, 0, 100, 40, None);
+            r.set_down_frame(fltk::enums::FrameType::DownBox);
+            r.set_label(label);
+            r
+        })
+        .collect();
+
+    radio_pack.end();
 
     // Bottom row: left (list + textbox) + right (image)
     let mut bottom_row = Pack::new(0, 0, 880, 640, "");
