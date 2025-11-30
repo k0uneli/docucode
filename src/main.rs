@@ -172,7 +172,7 @@ fn main() {
             {
                 let mut st = img_state.borrow_mut();
                 if let Some(ref mut img) = st.current {
-                    add_barcode_with_font(img, &barcode_text, &font);
+                    add_barcode_with_font(img, &barcode_text, &font, &radios);
                     if let Some(ref p) = st.path {
                         need_save_path = Some(p.clone());
                     }
@@ -350,8 +350,24 @@ fn load_barcode_font(path: &str) -> Option<Font<'static>> {
     Font::try_from_vec(data)
 }
 
+/// Get selected radio
+fn selected_radio(radios: &Vec<fltk::button::RadioButton>) -> Option<String> {
+    for r in radios {
+        if r.is_toggled() {
+            return Some(r.label());
+        }
+    }
+    None
+}
+
+
 /// Draw barcode text in the top-right corner, as small as is reasonable.
-fn add_barcode_with_font(img: &mut DynamicImage, barcode_text: &str, font: &Font<'static>) {
+fn add_barcode_with_font(
+    img: &mut DynamicImage,
+    barcode_text: &str,
+    font: &Font<'static>,
+    radios_ref: &Vec<fltk::button::RadioButton>,
+) {
     let mut buf: ImageBuffer<Rgba<u8>, Vec<u8>> = img.to_rgba8();
     let (w, h) = buf.dimensions();
 
@@ -364,6 +380,27 @@ fn add_barcode_with_font(img: &mut DynamicImage, barcode_text: &str, font: &Font
 
     // Compute text width
     let v_metrics = font.v_metrics(scale);
+
+
+    // ---- TOP LEFT BARCODE (no margin) ----
+    if let Some(num_str) = selected_radio(radios_ref) {
+        let small_code = format!("*{}*", num_str);
+
+        let x_left = 0;                      // flush with left edge
+        let y_left = v_metrics.ascent as i32; // baseline so top aligns with y = 0
+
+        imageproc::drawing::draw_text_mut(
+            &mut buf,
+            Rgba([0, 0, 0, 255]),
+            x_left,
+            y_left,
+            scale,
+            font,
+            &small_code,
+        );
+    }
+
+    //Right barcode
     let glyphs = font.layout(barcode_text, scale, rusttype::point(0.0, 0.0));
     let text_width: i32 = glyphs
         .clone()
