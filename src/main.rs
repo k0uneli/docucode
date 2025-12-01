@@ -4,6 +4,7 @@ use std::io;
 use std::path::Path;
 use std::rc::Rc;
 
+use fltk::button::RadioButton;
 use fltk::dialog::file_chooser;
 use fltk::image::RgbImage;
 use fltk::{
@@ -18,13 +19,13 @@ use fltk::{
     prelude::*,
     window::Window,
 };
-use fltk::button::RadioButton;
 
 use image::ImageFormat;
+use image::imageops::overlay;
 use image::io::Reader as ImageReader;
 use image::{DynamicImage, ImageBuffer, ImageResult, Rgba}; // image 0.24 API
 use imageproc::drawing::draw_text_mut;
-use rusttype::{Font, Scale};
+use rusttype::{Font, Scale, point};
 
 struct ImgState {
     original: Option<DynamicImage>, // pristine image when file was first loaded
@@ -35,7 +36,7 @@ struct ImgState {
 fn main() {
     let app = app::App::default();
 
-    let mut win = Window::new(100, 100, 900, 700, "TIFF Viewer + Barcode + Undo");
+    let mut win = Window::new(100, 100, 900, 900, "DocuCode");
 
     let mut vpack = Pack::new(10, 10, 880, 680, "");
     vpack.set_spacing(10);
@@ -51,7 +52,7 @@ fn main() {
     let mut undo_btn = Button::new(0, 0, 200, 40, "Undo");
 
     btn_row.end();
-    
+
     let labels = ["1", "2", "3", "4", "5", "6", "7", "10"];
     //Radio buttons for selecting doc category
 
@@ -78,7 +79,7 @@ fn main() {
     bottom_row.set_spacing(10);
 
     // Left column: listbox + textbox
-    let mut left_col = Pack::new(0, 0, 220, 640, "");
+    let mut left_col = Pack::new(0, 0, 220, 720, "");
     left_col.set_type(PackType::Vertical);
     left_col.set_spacing(10);
 
@@ -87,9 +88,12 @@ fn main() {
 
     let mut text_input = Input::new(0, 0, 220, 30, "");
     text_input.set_value(""); // empty by default
+    text_input.set_frame(fltk::enums::FrameType::DownBox); // makes it clearly visible
 
     left_col.end();
 
+    // make file_list resizable
+    left_col.resizable(&file_list);
     // Right: image frame
     let mut img_frame = Frame::new(0, 0, 650, 640, "");
     img_frame.set_frame(fltk::enums::FrameType::DownBox);
@@ -156,7 +160,11 @@ fn main() {
         barcode_btn.set_callback(move |_| {
             // Build barcode contents: *EN-MP<textbox>*
             let user_text = text_input.value();
-            let barcode_text = format!("*EN-MP{}*", user_text.trim());
+            let main_barcode_text = format!("*EN-MP{}*", user_text.trim());
+
+            // Left barcode *DT-X___*
+            let radio_label = selected_radio(&radios).unwrap_or_else(|| "1".to_string());
+            let left_barcode_text = format!("*{}*", radio_label);
 
             // Load barcode font
             let font = match load_barcode_font("barcode.ttf") {
@@ -167,12 +175,12 @@ fn main() {
                 }
             };
 
-            // Mutate current image in-place
+            //Mutate image in place
             let mut need_save_path: Option<String> = None;
             {
                 let mut st = img_state.borrow_mut();
                 if let Some(ref mut img) = st.current {
-                    add_barcode_with_font(img, &barcode_text, &font, &radios);
+                    add_font_barcodes_to_image(img, &font, &main_barcode_text, &left_barcode_text);
                     if let Some(ref p) = st.path {
                         need_save_path = Some(p.clone());
                     }
@@ -360,71 +368,94 @@ fn selected_radio(radios: &Vec<fltk::button::RadioButton>) -> Option<String> {
     None
 }
 
-
-/// Draw barcode text in the top-right corner, as small as is reasonable.
-fn add_barcode_with_font(
-    img: &mut DynamicImage,
-    barcode_text: &str,
+fn render_text_barcode_image(
+    text: &str,
     font: &Font<'static>,
-    radios_ref: &Vec<fltk::button::RadioButton>,
-) {
-    let mut buf: ImageBuffer<Rgba<u8>, Vec<u8>> = img.to_rgba8();
-    let (w, h) = buf.dimensions();
-
-    // Small font: based on image height, but with a low cap
-    let target_height = ((h as f32) / 20.0).max(25.0); // ~5% of height, minimum 25px
+    target_height: u32,
+) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
+    // font size
     let scale = Scale {
-        x: target_height,
-        y: target_height,
+        x: target_height as f32,
+        y: target_height as f32,
     };
 
-    // Compute text width
     let v_metrics = font.v_metrics(scale);
 
+    // baseline so the text fits within the image
+    let baseline = target_height as f32;
 
-    // ---- TOP LEFT BARCODE (no margin) ----
-    if let Some(num_str) = selected_radio(radios_ref) {
-        let small_code = format!("*{}*", num_str);
+    // lay out glyphs
+    let glyphs: Vec<_> = font.layout(text, scale, point(0.0, baseline)).collect();
 
-        let x_left = 0;                      // flush with left edge
-        let y_left = v_metrics.ascent as i32; // baseline so top aligns with y = 0
+    // compute tight bounding box
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
 
-        imageproc::drawing::draw_text_mut(
-            &mut buf,
-            Rgba([0, 0, 0, 255]),
-            x_left,
-            y_left,
-            scale,
-            font,
-            &small_code,
-        );
+    for g in &glyphs {
+        if let Some(bb) = g.pixel_bounding_box() {
+            min_x = min_x.min(bb.min.x);
+            min_y = min_y.min(bb.min.y);
+            max_x = max_x.max(bb.max.x);
+            max_y = max_y.max(bb.max.y);
+        }
     }
 
-    //Right barcode
-    let glyphs = font.layout(barcode_text, scale, rusttype::point(0.0, 0.0));
-    let text_width: i32 = glyphs
-        .clone()
-        .filter_map(|g| g.pixel_bounding_box())
-        .map(|bb| bb.max.x)
-        .max()
-        .unwrap_or(0);
+    if min_x == i32::MAX {
+        // empty string fallback: 1x1 white
+        return ImageBuffer::from_pixel(1, 1, Rgba([255, 255, 255, 255]));
+    }
 
-    let margin = 5i32;
+    let width = (max_x - min_x) as u32;
+    let height = (max_y - min_y) as u32;
 
-    let x = (w as i32 - text_width).max(0);
-    let y = 0; // near top
+    // white background
+    let mut img = ImageBuffer::from_pixel(width, height, Rgba([255, 255, 255, 255]));
+
+    // draw text shifted so it fits in the image
+    let offset_x = -min_x;
+    let offset_y = -min_y;
 
     draw_text_mut(
-        &mut buf,
+        &mut img,
         Rgba([0, 0, 0, 255]),
-        x,
-        y,
+        offset_x,
+        offset_y,
         scale,
         font,
-        barcode_text,
+        text,
     );
 
-    *img = DynamicImage::ImageRgba8(buf);
+    img
+}
+
+fn add_font_barcodes_to_image(
+    img: &mut DynamicImage,
+    font: &Font<'static>,
+    main_text: &str, // e.g. "*EN-MPxxx*"
+    left_text: &str, // e.g. "*1*"
+) {
+    let mut base = img.to_rgba8();
+    let (w, _h) = base.dimensions();
+
+    // choose a barcode height in pixels
+    let bar_height = 40u32;
+
+    // right barcode
+    let main_img = render_text_barcode_image(main_text, font, bar_height);
+    let (mw, _mh) = main_img.dimensions();
+    let right_x = w.saturating_sub(mw);
+    let right_y = 0;
+    overlay(&mut base, &main_img, right_x as i64, right_y as i64);
+
+    // left barcode
+    let left_img = render_text_barcode_image(left_text, font, bar_height);
+    let left_x = 0;
+    let left_y = 0;
+    overlay(&mut base, &left_img, left_x, left_y);
+
+    *img = DynamicImage::ImageRgba8(base);
 }
 
 fn save_tiff_gray(img: &DynamicImage, path: &str) -> ImageResult<()> {
