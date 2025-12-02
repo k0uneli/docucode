@@ -4,18 +4,18 @@ use std::io;
 use std::path::Path;
 use std::rc::Rc;
 
-use fltk::button::RadioButton;
 use fltk::dialog::file_chooser;
-use fltk::image::RgbImage;
 use fltk::{
     app,
     browser::HoldBrowser,
-    button::Button,
+    button::{Button, RadioButton},
     dialog,
     enums::{Align, Color},
     frame::Frame,
     group::{Pack, PackType},
+    image::RgbImage,
     input::Input,
+    menu::{Choice, MenuFlag, SysMenuBar},
     prelude::*,
     window::Window,
 };
@@ -36,27 +36,113 @@ struct ImgState {
 fn main() {
     let app = app::App::default();
 
-    let mut win = Window::new(100, 100, 900, 900, "DocuCode");
+    let mut win = Window::new(100, 100, 1280, 1000, "DocuCode");
 
-    let mut vpack = Pack::new(10, 10, 880, 680, "");
+    let mut menubar = SysMenuBar::new(0, 0, 1000, 25, "");
+
+    // Shared image state
+    let img_state = Rc::new(RefCell::new(ImgState {
+        original: None,
+        current: None,
+        path: None,
+    }));
+
+    // Right: image frame
+    let mut img_frame = Frame::new(250, 135, 1000, 1414, "");
+    img_frame.set_frame(fltk::enums::FrameType::DownBox);
+    img_frame.set_align(Align::Inside | Align::Center);
+    img_frame.set_color(Color::White);
+
+    let mut f_for_menu = img_frame.clone();
+    let img_state_for_menu = Rc::clone(&img_state);
+
+    menubar.add(
+        "&File/Open...\t", // shown as File → Open...
+        fltk::enums::Shortcut::Ctrl | 'o',
+        MenuFlag::Normal,
+        move |_| {
+            // TODO: call your existing "open" logic here
+            println!("File > Open clicked");
+            open_image_dialog(&img_state_for_menu, &mut f_for_menu);
+        },
+    );
+
+    menubar.add(
+        "&File/Quit\t",
+        fltk::enums::Shortcut::Ctrl | 'q',
+        MenuFlag::Normal,
+        |_| {
+            // simple quit
+            app::quit();
+        },
+    );
+
+    let mut f_for_undo = img_frame.clone();
+    let img_state_for_undo = Rc::clone(&img_state);
+
+    menubar.add(
+        "&Edit/Undo\t",
+        fltk::enums::Shortcut::Ctrl | 'z',
+        MenuFlag::Normal,
+        move |_| {
+            // you can call your undo logic here
+            // We'll compute this inside the borrow and use it after.
+            let path_to_save: Option<String>;
+            let current_image: Option<DynamicImage>;
+
+            {
+                let mut st = img_state_for_undo.borrow_mut();
+
+                // Check we actually have something to undo
+                if st.original.is_none() || st.path.is_none() {
+                    dialog::message_default("Nothing to undo.");
+                    return;
+                }
+
+                // Clone out of the state while we still hold the mutable borrow
+                let orig = st.original.as_ref().unwrap().clone();
+                let path = st.path.as_ref().unwrap().clone();
+
+                // Update current in the state
+                st.current = Some(orig.clone());
+
+                // Prepare data for use after we drop `st`
+                path_to_save = Some(path);
+                current_image = Some(orig);
+            } // <- `st` borrow ends here
+
+            // Now we can use the cloned values without any borrows in the way
+            if let (Some(path), Some(img)) = (path_to_save, current_image) {
+                if let Err(e) = save_tiff_gray(&img, &path) {
+                    dialog::message_default(&format!("Failed to restore original image:\n{e}"));
+                }
+                redraw_image(&mut f_for_undo, &img);
+            }
+            println!("Edit > Undo clicked");
+        },
+    );
+
+    let mut vpack = Pack::new(10, 35, 880, 680, "");
     vpack.set_spacing(10);
     vpack.set_type(PackType::Vertical);
 
     // Top row: buttons
-    let mut btn_row = Pack::new(0, 0, 880, 40, "");
+    let mut btn_row = Pack::new(0, 25, 880, 40, "");
     btn_row.set_type(PackType::Horizontal);
     btn_row.set_spacing(10);
 
-    let mut open_btn = Button::new(0, 0, 200, 40, "Open TIFF…");
-    let mut barcode_btn = Button::new(0, 0, 200, 40, "Add Barcode");
-    let mut undo_btn = Button::new(0, 0, 200, 40, "Undo");
+    let mut barcode_btn = Button::new(0, 25, 200, 40, "Add Barcode");
 
+    let mut type_choice = Choice::new(0, 25, 80, 40, None);
+    type_choice.add_choice("E|P|D|H|W|T|None");
+
+    type_choice.set_value(0);
     btn_row.end();
 
-    let labels = ["1", "2", "3", "4", "5", "6", "7", "10"];
+    let labels = ["1", "2", "3", "4", "5", "6", "7", "100"];
     //Radio buttons for selecting doc category
 
-    let mut radio_pack = Pack::new(0, 0, 880, 40, "");
+    let mut radio_pack = Pack::new(0, 25, 880, 40, "");
     radio_pack.set_type(PackType::Horizontal);
     radio_pack.set_spacing(10);
 
@@ -64,7 +150,7 @@ fn main() {
     let mut radios: Vec<RadioButton> = labels
         .iter()
         .map(|label| {
-            let mut r = RadioButton::new(0, 0, 100, 40, None);
+            let mut r = RadioButton::new(0, 25, 100, 40, None);
             r.set_down_frame(fltk::enums::FrameType::DownBox);
             r.set_label(label);
             r
@@ -94,11 +180,6 @@ fn main() {
 
     // make file_list resizable
     left_col.resizable(&file_list);
-    // Right: image frame
-    let mut img_frame = Frame::new(0, 0, 650, 640, "");
-    img_frame.set_frame(fltk::enums::FrameType::DownBox);
-    img_frame.set_align(Align::Inside | Align::Center);
-    img_frame.set_color(Color::White);
 
     bottom_row.end();
     vpack.end();
@@ -116,45 +197,19 @@ fn main() {
         dialog::message_default(&format!("Failed to read image directory:\n{e}"));
     }
 
-    // Shared image state
-    let img_state = Rc::new(RefCell::new(ImgState {
-        original: None,
-        current: None,
-        path: None,
-    }));
-
     // -------------------------------
     // Open TIFF button (manual chooser)
     // -------------------------------
     {
-        let mut img_frame = img_frame.clone();
-        let img_state = img_state.clone();
-
-        open_btn.set_callback(move |_| {
-            if let Some(path) = file_chooser("Select TIFF", "*.tif\t*.tiff", ".", false) {
-                match load_image(&path) {
-                    Ok(img) => {
-                        let mut st = img_state.borrow_mut();
-                        st.original = Some(img.to_rgba8().into());
-                        st.current = st.original.clone();
-                        st.path = Some(path.clone());
-
-                        if let Some(ref cur) = st.current {
-                            redraw_image(&mut img_frame, cur);
-                        }
-                    }
-                    Err(e) => dialog::message_default(&format!("Failed to load image:\n{e}")),
-                }
-            }
-        });
+        print!("h");
     }
 
     // -------------------------------
     // Barcode button – add + overwrite file
     // -------------------------------
     {
-        let mut img_frame = img_frame.clone();
-        let img_state = img_state.clone();
+        let mut f_for_btn = img_frame.clone();
+        let img_state = Rc::clone(&img_state);
         let text_input = text_input.clone();
 
         barcode_btn.set_callback(move |_| {
@@ -164,8 +219,12 @@ fn main() {
 
             // Left barcode *DT-X___*
             let radio_label = selected_radio(&radios).unwrap_or_else(|| "1".to_string());
-            let left_barcode_text = format!("*{}*", radio_label);
-
+            let document_code = selected_type(&type_choice).unwrap_or_else(|| "E".to_string());
+            let left_barcode_text = if document_code == "None" {
+                "".to_string()
+            } else {
+                format!("*DT-{}{}*", document_code, radio_label)
+            };
             // Load barcode font
             let font = match load_barcode_font("barcode.ttf") {
                 Some(f) => f,
@@ -198,51 +257,8 @@ fn main() {
                         dialog::message_default(&format!("Failed to save barcoded image:\n{e}"));
                     }
                     // Redisplay
-                    redraw_image(&mut img_frame, img);
+                    redraw_image(&mut f_for_btn, img);
                 }
-            }
-        });
-    }
-
-    // -------------------------------
-    // Undo button – restore original + overwrite file
-    // -------------------------------
-    {
-        let mut img_frame = img_frame.clone();
-        let img_state = img_state.clone();
-
-        undo_btn.set_callback(move |_| {
-            // We'll compute this inside the borrow and use it after.
-            let path_to_save: Option<String>;
-            let current_image: Option<DynamicImage>;
-
-            {
-                let mut st = img_state.borrow_mut();
-
-                // Check we actually have something to undo
-                if st.original.is_none() || st.path.is_none() {
-                    dialog::message_default("Nothing to undo.");
-                    return;
-                }
-
-                // Clone out of the state while we still hold the mutable borrow
-                let orig = st.original.as_ref().unwrap().clone();
-                let path = st.path.as_ref().unwrap().clone();
-
-                // Update current in the state
-                st.current = Some(orig.clone());
-
-                // Prepare data for use after we drop `st`
-                path_to_save = Some(path);
-                current_image = Some(orig);
-            } // <- `st` borrow ends here
-
-            // Now we can use the cloned values without any borrows in the way
-            if let (Some(path), Some(img)) = (path_to_save, current_image) {
-                if let Err(e) = save_tiff_gray(&img, &path) {
-                    dialog::message_default(&format!("Failed to restore original image:\n{e}"));
-                }
-                redraw_image(&mut img_frame, &img);
             }
         });
     }
@@ -362,7 +378,11 @@ fn load_barcode_font(path: &str) -> Option<Font<'static>> {
 fn selected_radio(radios: &Vec<fltk::button::RadioButton>) -> Option<String> {
     for r in radios {
         if r.is_toggled() {
-            return Some(r.label());
+            if r.label() == "100" {
+                return Some(r.label());
+            } else {
+                return Some("00".to_owned() + &r.label());
+            }
         }
     }
     None
@@ -440,22 +460,49 @@ fn add_font_barcodes_to_image(
     let (w, _h) = base.dimensions();
 
     // choose a barcode height in pixels
-    let bar_height = 40u32;
+    let bar_height = 75u32;
 
     // right barcode
     let main_img = render_text_barcode_image(main_text, font, bar_height);
     let (mw, _mh) = main_img.dimensions();
     let right_x = w.saturating_sub(mw);
     let right_y = 0;
-    overlay(&mut base, &main_img, right_x as i64, right_y as i64);
+    if main_text != "*EN-MP*" {
+        overlay(&mut base, &main_img, right_x as i64, right_y as i64);
+    }
 
     // left barcode
     let left_img = render_text_barcode_image(left_text, font, bar_height);
     let left_x = 0;
     let left_y = 0;
-    overlay(&mut base, &left_img, left_x, left_y);
-
+    if left_text != "*DT-None*" {
+        overlay(&mut base, &left_img, left_x, left_y);
+    }
     *img = DynamicImage::ImageRgba8(base);
+}
+
+// Return selected doc type (from dropdown menu)
+fn selected_type(choice: &Choice) -> Option<String> {
+    choice.text(choice.value()).map(|s| s.to_string())
+}
+
+fn open_image_dialog(img_state: &Rc<RefCell<ImgState>>, img_frame: &mut Frame) {
+    if let Some(path) = dialog::file_chooser("Select Scan(.tiff/.tif)", "*.tif\t*.tiff", ".", false)
+    {
+        match load_image(&path) {
+            Ok(img) => {
+                let mut st = img_state.borrow_mut();
+                st.original = Some(img.to_rgb8().into());
+                st.current = st.original.clone();
+                st.path = Some(path.clone());
+
+                if let Some(ref cur) = st.current {
+                    redraw_image(img_frame, cur);
+                }
+            }
+            Err(e) => dialog::message_default(&format!("Failed to load image:\n{e}")),
+        }
+    }
 }
 
 fn save_tiff_gray(img: &DynamicImage, path: &str) -> ImageResult<()> {
