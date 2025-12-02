@@ -122,6 +122,37 @@ fn main() {
         },
     );
 
+    menubar.add(
+        "&Help/Tips\t",
+        fltk::enums::Shortcut::Ctrl | 'h',
+        MenuFlag::Normal,
+        |_| {
+            // simple quit
+            print!("help");
+            dialog::message_default(
+                "Tips:\n\n 
+                • CTRL+z to undo\n\n 
+                • ",
+            );
+        },
+    );
+
+    menubar.add(
+        "&Help/About\t",
+        fltk::enums::Shortcut::Ctrl | 'a',
+        MenuFlag::Normal,
+        |_| {
+            // simple quit
+            dialog::message_default(
+                "DocuCode V2:\n\n\
+             • Written by Lucas Valente 2023, 2025\n\
+             • For Melbourne Pathology use\n\
+             • For issues, please email me at lucasjamesvalente(at)gmail.com",
+            );
+            print!("help");
+        },
+    );
+
     let mut vpack = Pack::new(10, 35, 880, 680, "");
     vpack.set_spacing(10);
     vpack.set_type(PackType::Vertical);
@@ -132,6 +163,7 @@ fn main() {
     btn_row.set_spacing(10);
 
     let mut barcode_btn = Button::new(0, 25, 200, 40, "Add Barcode");
+    let mut reload_btn = Button::new(0, 25, 200, 40, "Refresh");
 
     let mut type_choice = Choice::new(0, 25, 80, 40, None);
     type_choice.add_choice("E|P|D|H|W|T|None");
@@ -191,7 +223,30 @@ fn main() {
     if image_dir.is_empty() {
         dialog::message_default("config.txt missing or empty; defaulting to current directory.");
     }
+    // Now we have image dir populate.
+    {
+        let tiff_dir = image_dir.clone();
+        let mut file_list_clone = file_list.clone();
 
+        // Set callback for button
+        reload_btn.set_callback(move |_| {
+            reload_tiff_list(&mut file_list_clone, &tiff_dir);
+        });
+    }
+    // Set callback for menu
+    {
+        let tiff_dir = image_dir.clone();
+        let mut file_list_clone = file_list.clone();
+
+        menubar.add(
+            "&File/Reload\t",
+            fltk::enums::Shortcut::Ctrl | 'r',
+            MenuFlag::Normal,
+            move |_| {
+                reload_tiff_list(&mut file_list_clone, &tiff_dir);
+            },
+        );
+    }
     // Fill listbox with TIFF filenames
     if let Err(e) = populate_file_list(&mut file_list, &image_dir) {
         dialog::message_default(&format!("Failed to read image directory:\n{e}"));
@@ -501,6 +556,36 @@ fn open_image_dialog(img_state: &Rc<RefCell<ImgState>>, img_frame: &mut Frame) {
                 }
             }
             Err(e) => dialog::message_default(&format!("Failed to load image:\n{e}")),
+        }
+    }
+}
+
+fn reload_tiff_list(list: &mut HoldBrowser, folder: &str) {
+    list.clear();
+
+    if let Ok(entries) = fs::read_dir(folder) {
+        // Collect just tif/tiff filenames (or full paths)
+        let mut files: Vec<String> = entries
+            .flatten()
+            .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+            .filter_map(|e| {
+                let path = e.path();
+                let ext = path.extension()?.to_string_lossy().to_lowercase();
+                if ext == "tif" || ext == "tiff" {
+                    // only filename:
+                    Some(path.file_name()?.to_string_lossy().to_string())
+                    // or full path:
+                    // Some(path.to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        files.sort();
+
+        for name in files {
+            list.add(&name);
         }
     }
 }
