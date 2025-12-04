@@ -9,7 +9,7 @@ use fltk::{
     browser::HoldBrowser,
     button::{Button, RadioButton},
     dialog,
-    enums::{Align, Color, Shortcut},
+    enums::{Align, CallbackTrigger, Color, Shortcut},
     frame::Frame,
     group::{Pack, PackType},
     input::Input,
@@ -34,6 +34,9 @@ use config::{AppConfig, load_config, save_config};
 
 mod settings;
 use settings::show_settings_dialog;
+
+mod employees;
+use employees::{Employee, load_employees_from_csv};
 
 struct ImgState {
     original: Option<DynamicImage>, // pristine image when file was first loaded
@@ -230,7 +233,37 @@ fn main() {
     let mut text_input = Input::new(0, 0, 220, 30, "");
     text_input.set_value(""); // empty by default
     text_input.set_frame(fltk::enums::FrameType::DownBox); // makes it clearly visible
+    // Staff Lookup
+    let mut search_input = Input::new(0, 0, 220, 25, "");
+    let mut results_list = HoldBrowser::new(0, 0, 220, 150, "");
+    results_list.set_frame(fltk::enums::FrameType::DownBox);
 
+    search_input.set_trigger(CallbackTrigger::Changed);
+    {
+        let cfg_for_search = config.clone();
+        let mut results_list_clone = results_list.clone();
+
+        search_input.set_callback(move |inp| {
+            let q = inp.value();
+
+            let csv_path = {
+                let cfg = cfg_for_search.borrow();
+                cfg.csv_path.clone()
+            };
+
+            let employees = load_employees_from_csv(&csv_path).unwrap_or_default();
+            results_list_clone.clear();
+
+            if q.trim().is_empty() {
+                return; // no query then empty list TODO:MAYBE show all
+            }
+
+            for emp in employees.iter().filter(|e| e.matches_query(&q)) {
+                let line = format!("{} {}, {}", emp.first, emp.last, emp.number);
+                results_list_clone.add(&line);
+            }
+        });
+    }
     left_col.end();
 
     // make file_list resizable
