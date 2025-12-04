@@ -8,3 +8,5 @@ fltk = "1"
 image = { version = "0.24", default-features = false, features = ["tiff", "png", "jpeg"] }
 imageproc = "0.23"
 rusttype = "0.9"
+barcoders = {version = "2.0.0", features = ["image", "ascii", "svg", "json"]}
+csv = "1"
