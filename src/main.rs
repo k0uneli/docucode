@@ -241,34 +241,44 @@ fn main() {
     win.end();
     win.show();
 
-    // Read config (directory path)
-    let image_dir = &config.borrow().tiff_dir;
-    if image_dir.is_empty() {
-        dialog::message_default("config.txt missing or empty; defaulting to current directory.");
-    }
     // Now we have image dir populate.
     {
-        let tiff_dir = image_dir.clone();
+        let cfg_rc = config.clone();
         let mut file_list_clone = file_list.clone();
 
         // Set callback for button
         reload_btn.set_callback(move |_| {
+            let tiff_dir = {
+                let cfg = cfg_rc.borrow();
+                cfg.tiff_dir.clone()
+            };
             reload_tiff_list(&mut file_list_clone, &tiff_dir);
         });
     }
     // Set callback for menu
     {
-        let tiff_dir = image_dir.clone();
+        let cfg_rc = config.clone();
         let mut file_list_clone = file_list.clone();
-
         menubar.add(
             "&File/Reload\t",
             fltk::enums::Shortcut::Ctrl | 'r',
             MenuFlag::Normal,
             move |_| {
+                let tiff_dir = {
+                    let cfg = cfg_rc.borrow();
+                    cfg.tiff_dir.clone()
+                };
                 reload_tiff_list(&mut file_list_clone, &tiff_dir);
             },
         );
+    }
+    let image_dir = {
+        let cfg = config.borrow();
+        cfg.tiff_dir.clone()
+    };
+
+    if image_dir.is_empty() {
+        dialog::message_default("config.txt missing or empty; defaulting to current directory.");
     }
     // Fill listbox with TIFF filenames
     if let Err(e) = populate_file_list(&mut file_list, &image_dir) {

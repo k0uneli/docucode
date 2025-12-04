@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use fltk::{
     button::Button,
     dialog,
@@ -7,16 +10,19 @@ use fltk::{
     window::Window,
 };
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
-use crate::config::{AppConfig, load_config, save_config};
+use crate::config::{AppConfig, save_config};
 
 pub fn show_settings_dialog(config: Rc<RefCell<AppConfig>>) {
-    // Make a small modal window
-    let mut win = Window::new(200, 200, 520, 160, "Settings");
+    // Copy current values out & drop the borrow immediately
+    let (tiff_dir, csv_path) = {
+        let cfg = config.borrow();
+        (cfg.tiff_dir.clone(), cfg.csv_path.clone())
+    }; // <-- borrow ends here
 
-    let mut vpack = Pack::new(10, 10, 500, 140, "");
+    // Make a small modal window
+    let mut win = Window::new(200, 200, 720, 160, "Settings");
+
+    let mut vpack = Pack::new(250, 10, 500, 140, "");
     vpack.set_spacing(10);
     vpack.set_type(PackType::Vertical);
 
@@ -25,8 +31,8 @@ pub fn show_settings_dialog(config: Rc<RefCell<AppConfig>>) {
     tiff_row.set_type(PackType::Horizontal);
     tiff_row.set_spacing(5);
 
-    let mut tiff_input = Input::new(0, 0, 360, 25, "TIFF folder:");
-    tiff_input.set_value(&config.borrow().tiff_dir);
+    let mut tiff_input = Input::new(0, 0, 360, 25, "Scans folder:");
+    tiff_input.set_value(&tiff_dir);
 
     let mut tiff_browse = Button::new(0, 0, 100, 25, "Browse…");
     tiff_row.end();
@@ -36,8 +42,8 @@ pub fn show_settings_dialog(config: Rc<RefCell<AppConfig>>) {
     csv_row.set_type(PackType::Horizontal);
     csv_row.set_spacing(5);
 
-    let mut csv_input = Input::new(0, 0, 360, 25, "CSV file:");
-    csv_input.set_value(&config.borrow().csv_path);
+    let mut csv_input = Input::new(0, 0, 360, 25, "Staff Number .csv spreadsheet:");
+    csv_input.set_value(&csv_path);
 
     let mut csv_browse = Button::new(0, 0, 100, 25, "Browse…");
     csv_row.end();
@@ -56,7 +62,7 @@ pub fn show_settings_dialog(config: Rc<RefCell<AppConfig>>) {
     win.make_modal(true);
     win.show();
 
-    // --- Browse TIFF folder ---
+    // Browse TIFF
     {
         let mut tiff_input_clone = tiff_input.clone();
         tiff_browse.set_callback(move |_| {
@@ -66,7 +72,7 @@ pub fn show_settings_dialog(config: Rc<RefCell<AppConfig>>) {
         });
     }
 
-    // --- Browse CSV file ---
+    // Browse CSV
     {
         let mut csv_input_clone = csv_input.clone();
         csv_browse.set_callback(move |_| {
@@ -76,7 +82,7 @@ pub fn show_settings_dialog(config: Rc<RefCell<AppConfig>>) {
         });
     }
 
-    // --- OK: update config + save to config.txt ---
+    // OK: single short-lived mutable borrow
     {
         let cfg_rc = config.clone();
         let mut win_clone = win.clone();
@@ -84,19 +90,21 @@ pub fn show_settings_dialog(config: Rc<RefCell<AppConfig>>) {
         let mut csv_input_ok = csv_input.clone();
 
         ok_btn.set_callback(move |_| {
-            let mut cfg = cfg_rc.borrow_mut();
-            cfg.tiff_dir = tiff_input_ok.value();
-            cfg.csv_path = csv_input_ok.value();
+            {
+                let mut cfg = cfg_rc.borrow_mut(); // <-- your line 95
+                cfg.tiff_dir = tiff_input_ok.value();
+                cfg.csv_path = csv_input_ok.value();
 
-            if let Err(e) = save_config(&cfg) {
-                dialog::alert_default(&format!("Failed to save config:\n{e}"));
-            }
+                if let Err(e) = save_config(&cfg) {
+                    dialog::alert_default(&format!("Failed to save config:\n{e}"));
+                }
+            } // <-- mutable borrow ends here
 
             win_clone.hide();
         });
     }
 
-    // --- Cancel: just close ---
+    // Cancel: just close
     {
         let mut win_clone = win.clone();
         cancel_btn.set_callback(move |_| {
