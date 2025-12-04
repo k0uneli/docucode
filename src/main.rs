@@ -4,7 +4,6 @@ use std::io;
 use std::path::Path;
 use std::rc::Rc;
 
-use fltk::dialog::file_chooser;
 use fltk::{
     app,
     browser::HoldBrowser,
@@ -13,20 +12,22 @@ use fltk::{
     enums::{Align, Color},
     frame::Frame,
     group::{Pack, PackType},
-    image::RgbImage,
     input::Input,
     menu::{Choice, MenuFlag, SysMenuBar},
     prelude::*,
     window::Window,
 };
 
-use image::ImageFormat;
-use image::imageops::overlay;
-use image::io::Reader as ImageReader;
-use image::{DynamicImage, ImageBuffer, ImageResult, Rgba}; // image 0.24 API
-use imageproc::drawing::draw_text_mut;
-use rusttype::{Font, Scale, point};
+use image::DynamicImage; // image 0.24 API
 
+mod image_utils;
+use image_utils::{load_image, redraw_image, save_tiff_gray};
+
+mod barcode;
+use barcode::{add_font_barcodes_to_image, load_barcode_font};
+
+mod files;
+use files::{populate_file_list, read_config_dir, reload_tiff_list};
 struct ImgState {
     original: Option<DynamicImage>, // pristine image when file was first loaded
     current: Option<DynamicImage>,  // possibly barcoded version
@@ -355,80 +356,6 @@ fn main() {
 
 /* ---------- Helpers ---------- */
 
-/// Read config file: first non-empty line is the directory path.
-/// Returns "." if file can't be read.
-fn read_config_dir(path: &str) -> String {
-    match fs::read_to_string(path) {
-        Ok(contents) => contents
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .unwrap_or(".")
-            .to_string(),
-        Err(_) => ".".to_string(),
-    }
-}
-
-/// Populate the file list with all .tif / .tiff in image_dir.
-fn populate_file_list(list: &mut HoldBrowser, image_dir: &str) -> io::Result<()> {
-    list.clear();
-
-    let dir = Path::new(image_dir);
-    if !dir.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("Directory does not exist: {image_dir}"),
-        ));
-    }
-
-    let mut entries: Vec<String> = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if let Some(name) = entry.file_name().to_str() {
-            let lower = name.to_lowercase();
-            if lower.ends_with(".tif") || lower.ends_with(".tiff") {
-                entries.push(name.to_string());
-            }
-        }
-    }
-
-    entries.sort();
-    for name in entries {
-        list.add(&name);
-    }
-
-    Ok(())
-}
-
-/// Load an image file into DynamicImage.
-fn load_image(path: &str) -> ImageResult<DynamicImage> {
-    ImageReader::open(path)?.decode()
-}
-
-/// Convert DynamicImage → fltk::image::RgbImage
-fn dynamic_to_fltk(img: &DynamicImage) -> Option<RgbImage> {
-    let img = img.to_rgba8();
-    let (w, h) = img.dimensions();
-    let bytes = img.into_raw();
-    RgbImage::new(&bytes, w as i32, h as i32, fltk::enums::ColorDepth::Rgba8).ok()
-}
-
-/// Resize image to frame size and display it.
-fn redraw_image(frame: &mut Frame, img: &DynamicImage) {
-    let (fw, fh) = (frame.w(), frame.h());
-    let resized = img.resize_to_fill(fw as u32, fh as u32, image::imageops::FilterType::Nearest);
-    if let Some(rgb) = dynamic_to_fltk(&resized) {
-        frame.set_image(Some(rgb));
-        frame.redraw();
-    }
-}
-
-/// Load the barcode font from disk.
-fn load_barcode_font(path: &str) -> Option<Font<'static>> {
-    let data = fs::read(path).ok()?;
-    Font::try_from_vec(data)
-}
-
 /// Get selected radio
 fn selected_radio(radios: &Vec<fltk::button::RadioButton>) -> Option<String> {
     for r in radios {
@@ -441,99 +368,6 @@ fn selected_radio(radios: &Vec<fltk::button::RadioButton>) -> Option<String> {
         }
     }
     None
-}
-
-fn render_text_barcode_image(
-    text: &str,
-    font: &Font<'static>,
-    target_height: u32,
-) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
-    // font size
-    let scale = Scale {
-        x: target_height as f32,
-        y: target_height as f32,
-    };
-
-    let v_metrics = font.v_metrics(scale);
-
-    // baseline so the text fits within the image
-    let baseline = target_height as f32;
-
-    // lay out glyphs
-    let glyphs: Vec<_> = font.layout(text, scale, point(0.0, baseline)).collect();
-
-    // compute tight bounding box
-    let mut min_x = i32::MAX;
-    let mut min_y = i32::MAX;
-    let mut max_x = i32::MIN;
-    let mut max_y = i32::MIN;
-
-    for g in &glyphs {
-        if let Some(bb) = g.pixel_bounding_box() {
-            min_x = min_x.min(bb.min.x);
-            min_y = min_y.min(bb.min.y);
-            max_x = max_x.max(bb.max.x);
-            max_y = max_y.max(bb.max.y);
-        }
-    }
-
-    if min_x == i32::MAX {
-        // empty string fallback: 1x1 white
-        return ImageBuffer::from_pixel(1, 1, Rgba([255, 255, 255, 255]));
-    }
-
-    let width = (max_x - min_x) as u32;
-    let height = (max_y - min_y) as u32;
-
-    // white background
-    let mut img = ImageBuffer::from_pixel(width, height, Rgba([255, 255, 255, 255]));
-
-    // draw text shifted so it fits in the image
-    let offset_x = -min_x;
-    let offset_y = -min_y;
-
-    draw_text_mut(
-        &mut img,
-        Rgba([0, 0, 0, 255]),
-        offset_x,
-        offset_y,
-        scale,
-        font,
-        text,
-    );
-
-    img
-}
-
-fn add_font_barcodes_to_image(
-    img: &mut DynamicImage,
-    font: &Font<'static>,
-    main_text: &str, // e.g. "*EN-MPxxx*"
-    left_text: &str, // e.g. "*1*"
-) {
-    let mut base = img.to_rgba8();
-    let (w, _h) = base.dimensions();
-
-    // choose a barcode height in pixels
-    let bar_height = 75u32;
-
-    // right barcode
-    let main_img = render_text_barcode_image(main_text, font, bar_height);
-    let (mw, _mh) = main_img.dimensions();
-    let right_x = w.saturating_sub(mw);
-    let right_y = 0;
-    if main_text != "*EN-MP*" {
-        overlay(&mut base, &main_img, right_x as i64, right_y as i64);
-    }
-
-    // left barcode
-    let left_img = render_text_barcode_image(left_text, font, bar_height);
-    let left_x = 0;
-    let left_y = 0;
-    if left_text != "*DT-None*" {
-        overlay(&mut base, &left_img, left_x, left_y);
-    }
-    *img = DynamicImage::ImageRgba8(base);
 }
 
 // Return selected doc type (from dropdown menu)
@@ -558,49 +392,4 @@ fn open_image_dialog(img_state: &Rc<RefCell<ImgState>>, img_frame: &mut Frame) {
             Err(e) => dialog::message_default(&format!("Failed to load image:\n{e}")),
         }
     }
-}
-
-fn reload_tiff_list(list: &mut HoldBrowser, folder: &str) {
-    list.clear();
-
-    if let Ok(entries) = fs::read_dir(folder) {
-        // Collect just tif/tiff filenames (or full paths)
-        let mut files: Vec<String> = entries
-            .flatten()
-            .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
-            .filter_map(|e| {
-                let path = e.path();
-                let ext = path.extension()?.to_string_lossy().to_lowercase();
-                if ext == "tif" || ext == "tiff" {
-                    // only filename:
-                    Some(path.file_name()?.to_string_lossy().to_string())
-                    // or full path:
-                    // Some(path.to_string_lossy().to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        files.sort();
-
-        for name in files {
-            list.add(&name);
-        }
-    }
-}
-
-fn save_tiff_gray(img: &DynamicImage, path: &str) -> ImageResult<()> {
-    use std::fs::File;
-    use std::io::BufWriter;
-
-    // Convert to 8-bit grayscale to reduce size
-    let gray = img.to_luma8();
-    let dyn_gray = DynamicImage::ImageLuma8(gray);
-
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
-
-    // Let `image` encode a grayscale TIFF with its default comould i use the fax compressionpression
-    dyn_gray.write_to(&mut writer, ImageFormat::Tiff)
 }
