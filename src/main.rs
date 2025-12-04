@@ -9,7 +9,7 @@ use fltk::{
     browser::HoldBrowser,
     button::{Button, RadioButton},
     dialog,
-    enums::{Align, Color},
+    enums::{Align, Color, Shortcut},
     frame::Frame,
     group::{Pack, PackType},
     input::Input,
@@ -28,6 +28,13 @@ use barcode::{add_font_barcodes_to_image, load_barcode_font};
 
 mod files;
 use files::{populate_file_list, read_config_dir, reload_tiff_list};
+
+mod config;
+use config::{AppConfig, load_config, save_config};
+
+mod settings;
+use settings::show_settings_dialog;
+
 struct ImgState {
     original: Option<DynamicImage>, // pristine image when file was first loaded
     current: Option<DynamicImage>,  // possibly barcoded version
@@ -36,6 +43,8 @@ struct ImgState {
 
 fn main() {
     let app = app::App::default();
+
+    let config = Rc::new(RefCell::new(load_config()));
 
     let mut win = Window::new(100, 100, 1280, 1000, "DocuCode");
 
@@ -80,6 +89,19 @@ fn main() {
 
     let mut f_for_undo = img_frame.clone();
     let img_state_for_undo = Rc::clone(&img_state);
+
+    // Settings window
+    {
+        let cfg_rc = config.clone();
+        menubar.add(
+            "&Edit/Settings...\t",
+            Shortcut::Ctrl | 's',
+            MenuFlag::Normal,
+            move |_| {
+                show_settings_dialog(cfg_rc.clone());
+            },
+        );
+    }
 
     menubar.add(
         "&Edit/Undo\t",
@@ -220,7 +242,7 @@ fn main() {
     win.show();
 
     // Read config (directory path)
-    let image_dir = Rc::new(read_config_dir("config.txt"));
+    let image_dir = &config.borrow().tiff_dir;
     if image_dir.is_empty() {
         dialog::message_default("config.txt missing or empty; defaulting to current directory.");
     }
@@ -251,13 +273,6 @@ fn main() {
     // Fill listbox with TIFF filenames
     if let Err(e) = populate_file_list(&mut file_list, &image_dir) {
         dialog::message_default(&format!("Failed to read image directory:\n{e}"));
-    }
-
-    // -------------------------------
-    // Open TIFF button (manual chooser)
-    // -------------------------------
-    {
-        print!("h");
     }
 
     // -------------------------------
