@@ -76,12 +76,13 @@ pub fn add_font_barcodes_to_image(
     font: &Font<'static>,
     main_text: &str, // e.g. "*EN-MPxxx*"
     left_text: &str, // e.g. "*1*"
+	bar_height: u32
 ) {
     let mut base = img.to_rgba8();
     let (w, _h) = base.dimensions();
 
     // choose a barcode height in pixels
-    let bar_height = 75u32;
+    //let bar_height = 200u32;
 
     // right barcode
     let main_img = render_text_barcode_image(main_text, font, bar_height);

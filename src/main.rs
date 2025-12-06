@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use fltk::{
@@ -309,7 +309,7 @@ fn main() {
         let cfg = config.borrow();
         cfg.tiff_dir.clone()
     };
-
+	
     if image_dir.is_empty() {
         dialog::message_default("config.txt missing or empty; defaulting to current directory.");
     }
@@ -350,10 +350,14 @@ fn main() {
 
             //Mutate image in place
             let mut need_save_path: Option<String> = None;
+			let bar_height = {
+				let cfg = config.borrow();
+				cfg.bar_height
+			};
             {
                 let mut st = img_state.borrow_mut();
                 if let Some(ref mut img) = st.current {
-                    add_font_barcodes_to_image(img, &font, &main_barcode_text, &left_barcode_text);
+                    add_font_barcodes_to_image(img, &font, &main_barcode_text, &left_barcode_text, bar_height);
                     if let Some(ref p) = st.path {
                         need_save_path = Some(p.clone());
                     }
@@ -391,13 +395,13 @@ fn main() {
                 return;
             }
             if let Some(filename) = b.text(idx) {
-                let full_path = format!("{}/{}", image_dir, filename);
-                match load_image(&full_path) {
+                let full_path = Path::new(&image_dir).join(&filename);
+                match load_image(full_path.to_str().unwrap()) {
                     Ok(img) => {
                         let mut st = img_state.borrow_mut();
                         st.original = Some(img.to_rgba8().into());
                         st.current = st.original.clone();
-                        st.path = Some(full_path.clone());
+                        st.path = Some(full_path.to_string_lossy().into_owned());
 
                         if let Some(ref cur) = st.current {
                             redraw_image(&mut img_frame, cur);
@@ -434,14 +438,21 @@ fn selected_type(choice: &Choice) -> Option<String> {
 }
 
 fn open_image_dialog(img_state: &Rc<RefCell<ImgState>>, img_frame: &mut Frame) {
-    if let Some(path) = dialog::file_chooser("Select Scan(.tiff/.tif)", "*.tif\t*.tiff", ".", false)
+    if let Some(path_str) =
+        dialog::file_chooser("Select Scan(.tiff/.tif)", "*.tif\t*.tiff", ".", false)
     {
-        match load_image(&path) {
+        // Turn the returned string into a PathBuf
+        let path = PathBuf::from(&path_str);
+
+        // load_image takes &str, so convert PathBuf → &str
+        match load_image(path.to_str().unwrap()) {
             Ok(img) => {
                 let mut st = img_state.borrow_mut();
                 st.original = Some(img.to_rgb8().into());
                 st.current = st.original.clone();
-                st.path = Some(path.clone());
+
+                // Store the path as a String in ImgState
+                st.path = Some(path.to_string_lossy().into_owned());
 
                 if let Some(ref cur) = st.current {
                     redraw_image(img_frame, cur);
