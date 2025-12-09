@@ -1,12 +1,17 @@
 // src/image_utils.rs
 
 use std::fs::File;
+use std::io::Write;
 use std::path::Path;
 
 use fltk::frame::Frame;
 use fltk::image::RgbImage;
 use fltk::prelude::WidgetExt;
 
+use image::GenericImageView;
+use fax::encoder::Encoder as FaxEncoder;
+use fax::tiff as fax_tiff;
+use fax::{Color as FaxColor, VecWriter};
 use image::io::Reader as ImageReader;
 use image::{
     DynamicImage, ImageBuffer, ImageError, ImageFormat, ImageResult, Luma, Rgba,
@@ -168,13 +173,39 @@ pub fn save_tiff_gray(img: &DynamicImage, path: &str) -> ImageResult<()> {
     use std::fs::File;
     use std::io::BufWriter;
 
-    // Convert to 8-bit grayscale to reduce size
+    let (width, height) = img.dimensions();
+
+    if width > u16::MAX as u32 {
+        return Err(ImageError::IoError(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "CCITT T.6 encoder supports widths up to u16::MAX",
+        )));
+    }
+
+    // Convert to 1-bit bilevel (black/white) to align with CCITT Group 4 expectations.
     let gray = img.to_luma8();
-    let dyn_gray = DynamicImage::ImageLuma8(gray);
+    let mut fax_encoder = FaxEncoder::new(VecWriter::new());
 
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
+    for row in gray.chunks_exact(width as usize) {
+        fax_encoder
+            .encode_line(
+                row.iter().map(|&v| if v < 128 { FaxColor::Black } else { FaxColor::White }),
+                width as u16,
+            )
+            .expect("fax encoder for group 4 should be infallible");
+    }
 
-    // Let `image` encode a grayscale TIFF with its default comould i use the fax compressionpression
-    dyn_gray.write_to(&mut writer, ImageFormat::Tiff)
+    // Flush remaining bits and wrap the fax stream into a minimal TIFF header.
+    let fax_bytes = fax_encoder
+        .finish()
+        .expect("VecWriter for fax encoding should be infallible")
+        .finish();
+
+    let tiff_bytes = fax_tiff::wrap(&fax_bytes, width, height);
+
+    let mut writer = BufWriter::new(File::create(path)?);
+    writer.write_all(&tiff_bytes)?;
+    writer.flush()?;
+
+    Ok(())
 }
