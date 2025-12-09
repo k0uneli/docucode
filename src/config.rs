@@ -1,11 +1,21 @@
 use std::path::Path;
 use std::{fs, io};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AppConfig {
     pub tiff_dir: String,
     pub csv_path: String,
-	pub bar_height: u32,
+    pub bar_height: u32,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            tiff_dir: String::new(),
+            csv_path: String::new(),
+            bar_height: 200,
+        }
+    }
 }
 
 const CONFIG_PATH: &str = "config.txt";
@@ -23,14 +33,18 @@ pub fn load_config() -> AppConfig {
         } else if let Some(rest) = line.strip_prefix("csv_path=") {
             cfg.csv_path = rest.trim().to_string();
         } else if let Some(rest) = line.strip_prefix("bar_height=") {
-            cfg.bar_height = rest.trim().parse::<u32>()
-			.expect("Invalid bar_height in config");
+            if let Ok(parsed) = rest.trim().parse::<u32>() {
+                cfg.bar_height = parsed;
+            }
         }
     }
     cfg
 }
 
 pub fn save_config(cfg: &AppConfig) -> io::Result<()> {
-    let data = format!("tiff_dir={}\ncsv_path={}\nbar_height={}\n", cfg.tiff_dir, cfg.csv_path, cfg.bar_height);
+    let data = format!(
+        "tiff_dir={}\ncsv_path={}\nbar_height={}\n",
+        cfg.tiff_dir, cfg.csv_path, cfg.bar_height
+    );
     fs::write(CONFIG_PATH, data)
 }
