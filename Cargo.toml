@@ -11,3 +11,4 @@ rusttype = "0.9"
 barcoders = {version = "2.0.0", features = ["image", "ascii", "svg", "json"]}
 csv = "1"
 tiff = {version = "0.10.3", features = ["fax"]}
+fax = "0.2.6"
