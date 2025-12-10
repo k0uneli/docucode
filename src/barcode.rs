@@ -76,7 +76,7 @@ pub fn add_font_barcodes_to_image(
     font: &Font<'static>,
     main_text: &str, // e.g. "*EN-MPxxx*"
     left_text: &str, // e.g. "*1*"
-	bar_height: u32
+    bar_height: u32,
 ) {
     let mut base = img.to_rgba8();
     let (w, _h) = base.dimensions();
