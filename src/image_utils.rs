@@ -8,16 +8,15 @@ use fltk::frame::Frame;
 use fltk::image::RgbImage;
 use fltk::prelude::WidgetExt;
 
-use image::GenericImageView;
 use fax::encoder::Encoder as FaxEncoder;
 use fax::tiff as fax_tiff;
 use fax::{Color as FaxColor, VecWriter};
-use image::io::Reader as ImageReader;
-use image::{
-    DynamicImage, ImageBuffer, ImageError, ImageFormat, ImageResult, Luma, Rgba,
-};
+use image::GenericImageView;
 use image::error::DecodingError;
 use image::imageops::FilterType;
+use image::io::Reader as ImageReader;
+use image::{DynamicImage, ImageBuffer, ImageError, ImageFormat, ImageResult, Luma, Rgba};
+use imageproc::contrast::otsu_level;
 
 use tiff::decoder::{Decoder, DecodingResult};
 use tiff::{TiffError, TiffFormatError};
@@ -75,12 +74,9 @@ fn load_ccitt_tiff(path: &Path) -> Result<DynamicImage, TiffError> {
 
             if len == pixels {
                 // Standard 8-bit gray
-                let img = ImageBuffer::<Luma<u8>, _>::from_vec(w, h, buf)
-                    .ok_or_else(|| {
-                        TiffError::FormatError(
-                            TiffFormatError::InvalidDimensions(w, h)
-                        )
-                    })?;
+                let img = ImageBuffer::<Luma<u8>, _>::from_vec(w, h, buf).ok_or_else(|| {
+                    TiffError::FormatError(TiffFormatError::InvalidDimensions(w, h))
+                })?;
                 Ok(DynamicImage::ImageLuma8(img))
             } else {
                 // Likely 1-bit-packed bilevel (CCITT/fax style)
@@ -89,11 +85,9 @@ fn load_ccitt_tiff(path: &Path) -> Result<DynamicImage, TiffError> {
 
                 if len != expected {
                     return Err(TiffError::FormatError(
-                        TiffFormatError::CompressedDataCorrupt(
-                            format!(
-                                "unexpected U8 buffer length {len} for {w}x{h} (expected {expected})"
-                            ),
-                        ),
+                        TiffFormatError::CompressedDataCorrupt(format!(
+                            "unexpected U8 buffer length {len} for {w}x{h} (expected {expected})"
+                        )),
                     ));
                 }
 
@@ -115,12 +109,9 @@ fn load_ccitt_tiff(path: &Path) -> Result<DynamicImage, TiffError> {
                     }
                 }
 
-                let img = ImageBuffer::<Luma<u8>, _>::from_vec(w, h, out)
-                    .ok_or_else(|| {
-                        TiffError::FormatError(
-                            TiffFormatError::InvalidDimensions(w, h)
-                        )
-                    })?;
+                let img = ImageBuffer::<Luma<u8>, _>::from_vec(w, h, out).ok_or_else(|| {
+                    TiffError::FormatError(TiffFormatError::InvalidDimensions(w, h))
+                })?;
                 Ok(DynamicImage::ImageLuma8(img))
             }
         }
@@ -133,23 +124,17 @@ fn load_ccitt_tiff(path: &Path) -> Result<DynamicImage, TiffError> {
             }
 
             let img = ImageBuffer::<Luma<u8>, _>::from_vec(w, h, out)
-                .ok_or_else(|| {
-                    TiffError::FormatError(
-                        TiffFormatError::InvalidDimensions(w, h)
-                    )
-                })?;
+                .ok_or_else(|| TiffError::FormatError(TiffFormatError::InvalidDimensions(w, h)))?;
             Ok(DynamicImage::ImageLuma8(img))
         }
 
         other => Err(TiffError::FormatError(
-            TiffFormatError::CompressedDataCorrupt(
-                format!("unsupported TIFF decoding result: {other:?}"),
-            ),
+            TiffFormatError::CompressedDataCorrupt(format!(
+                "unsupported TIFF decoding result: {other:?}"
+            )),
         )),
     }
 }
-
- 
 
 /// Convert DynamicImage → fltk::image::RgbImage
 pub fn dynamic_to_fltk(img: &DynamicImage) -> Option<RgbImage> {
@@ -189,7 +174,13 @@ pub fn save_tiff_gray(img: &DynamicImage, path: &str) -> ImageResult<()> {
     for row in gray.chunks_exact(width as usize) {
         fax_encoder
             .encode_line(
-                row.iter().map(|&v| if v < 128 { FaxColor::Black } else { FaxColor::White }),
+                row.iter().map(|&v| {
+                    if v < 128 {
+                        FaxColor::Black
+                    } else {
+                        FaxColor::White
+                    }
+                }),
                 width as u16,
             )
             .expect("fax encoder for group 4 should be infallible");
@@ -208,4 +199,160 @@ pub fn save_tiff_gray(img: &DynamicImage, path: &str) -> ImageResult<()> {
     writer.flush()?;
 
     Ok(())
+}
+
+/// Attempt to locate barcode-like regions and paint them white one-by-one.
+///
+/// Uses a dark-pixel connected-component search with size and coverage heuristics that
+/// roughly match the configured barcode height. Returns the number of cleared regions.
+pub fn whiten_barcodes(img: &mut DynamicImage, bar_height: u32) -> usize {
+    let mut rgba = img.to_rgba8();
+    let gray = img.to_luma8();
+    let (w, h) = gray.dimensions();
+
+    if w == 0 || h == 0 {
+        return 0;
+    }
+
+    let threshold = otsu_level(&gray);
+    let mut visited = vec![false; (w * h) as usize];
+    let mut cleared_regions = 0usize;
+
+    // Per-component row/column tracking to verify that bars span most rows/columns.
+    let mut row_marks = vec![false; h as usize];
+    let mut col_marks = vec![false; w as usize];
+
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) as usize;
+            if visited[idx] {
+                continue;
+            }
+
+            let pix = gray.get_pixel(x, y).0[0];
+            if pix > threshold {
+                visited[idx] = true;
+                continue;
+            }
+
+            // Flood fill to find the connected dark region.
+            let mut stack = vec![(x, y)];
+            let mut min_x = x;
+            let mut max_x = x;
+            let mut min_y = y;
+            let mut max_y = y;
+            let mut dark_pixels: u64 = 0;
+            let mut rows_used: Vec<u32> = Vec::new();
+            let mut cols_used: Vec<u32> = Vec::new();
+
+            while let Some((cx, cy)) = stack.pop() {
+                let cidx = (cy * w + cx) as usize;
+                if visited[cidx] {
+                    continue;
+                }
+                visited[cidx] = true;
+
+                let p = gray.get_pixel(cx, cy).0[0];
+                if p > threshold {
+                    continue;
+                }
+
+                dark_pixels += 1;
+                if let Some(mark) = row_marks.get_mut(cy as usize) {
+                    if !*mark {
+                        *mark = true;
+                        rows_used.push(cy);
+                    }
+                }
+                if let Some(mark) = col_marks.get_mut(cx as usize) {
+                    if !*mark {
+                        *mark = true;
+                        cols_used.push(cx);
+                    }
+                }
+
+                min_x = min_x.min(cx);
+                max_x = max_x.max(cx);
+                min_y = min_y.min(cy);
+                max_y = max_y.max(cy);
+
+                // 4-neighbour flood fill across the whole page.
+                let neighbours = [
+                    (cx.wrapping_sub(1), cy),
+                    (cx + 1, cy),
+                    (cx, cy.wrapping_sub(1)),
+                    (cx, cy + 1),
+                ];
+
+                for (nx, ny) in neighbours {
+                    if nx < w && ny < h {
+                        let nidx = (ny * w + nx) as usize;
+                        if !visited[nidx] {
+                            stack.push((nx, ny));
+                        }
+                    }
+                }
+            }
+
+            let region_height = max_y - min_y + 1;
+            let region_width = max_x - min_x + 1;
+            let area = (region_height as u64) * (region_width as u64);
+            let dark_ratio = dark_pixels as f32 / area as f32;
+
+            let target_h = bar_height.max(40);
+            let min_h = ((target_h as f32) * 0.6).max(20.0) as u32;
+            let max_h = ((target_h as f32) * 1.8).max(min_h as f32) as u32;
+            let min_w = ((target_h as f32) * 0.3).max(10.0) as u32;
+            let max_w = ((target_h as f32) * 6.0).min(w.max(1) as f32) as u32;
+
+            let dark_rows = rows_used.len() as f32;
+            let dark_cols = cols_used.len() as f32;
+            let row_coverage = dark_rows / (region_height as f32);
+            let col_coverage = dark_cols / (region_width as f32);
+
+            let looks_like_barcode = region_height >= min_h
+                && region_height <= max_h
+                && region_width >= min_w
+                && region_width <= max_w
+                && dark_ratio >= 0.2
+                && dark_ratio <= 0.7
+                && row_coverage >= 0.7
+                && col_coverage >= 0.2;
+
+            if looks_like_barcode {
+                let margin = 2;
+                let from_x = min_x.saturating_sub(margin);
+                let to_x = (max_x + margin).min(w.saturating_sub(1));
+                let from_y = min_y.saturating_sub(margin);
+                let to_y = (max_y + margin).min(h.saturating_sub(1));
+
+                for yy in from_y..=to_y {
+                    for xx in from_x..=to_x {
+                        let idx = ((yy * w + xx) as usize) * 4;
+                        let buffer = rgba.as_mut();
+                        buffer[idx] = 255;
+                        buffer[idx + 1] = 255;
+                        buffer[idx + 2] = 255;
+                        buffer[idx + 3] = 255;
+                    }
+                }
+
+                cleared_regions += 1;
+            }
+
+            for &ry in &rows_used {
+                if let Some(slot) = row_marks.get_mut(ry as usize) {
+                    *slot = false;
+                }
+            }
+            for &cx in &cols_used {
+                if let Some(slot) = col_marks.get_mut(cx as usize) {
+                    *slot = false;
+                }
+            }
+        }
+    }
+
+    *img = DynamicImage::ImageRgba8(rgba);
+    cleared_regions
 }
