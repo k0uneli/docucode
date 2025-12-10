@@ -21,7 +21,7 @@ use fltk::{
 use image::DynamicImage; // image 0.24 API
 
 mod image_utils;
-use image_utils::{load_image, redraw_image, save_tiff_gray};
+use image_utils::{load_image, redraw_image, save_tiff_gray, whiten_barcodes};
 
 mod barcode;
 use barcode::{add_font_barcodes_to_image, load_barcode_font};
@@ -189,6 +189,7 @@ fn main() {
     btn_row.set_spacing(10);
 
     let mut barcode_btn = Button::new(0, 25, 200, 40, "Add Barcode");
+    let mut clean_btn = Button::new(0, 25, 200, 40, "Remove Barcodes");
     let mut reload_btn = Button::new(0, 25, 200, 40, "Refresh");
 
     let mut type_choice = Choice::new(0, 25, 80, 40, None);
@@ -309,7 +310,7 @@ fn main() {
         let cfg = config.borrow();
         cfg.tiff_dir.clone()
     };
-	
+
     if image_dir.is_empty() {
         dialog::message_default("config.txt missing or empty; defaulting to current directory.");
     }
@@ -325,6 +326,7 @@ fn main() {
         let mut f_for_btn = img_frame.clone();
         let img_state = Rc::clone(&img_state);
         let text_input = text_input.clone();
+        let cfg_rc = config.clone();
 
         barcode_btn.set_callback(move |_| {
             // Build barcode contents: *EN-MP<textbox>*
@@ -350,14 +352,20 @@ fn main() {
 
             //Mutate image in place
             let mut need_save_path: Option<String> = None;
-			let bar_height = {
-				let cfg = config.borrow();
-				cfg.bar_height
-			};
+            let bar_height = {
+                let cfg = cfg_rc.borrow();
+                cfg.bar_height
+            };
             {
                 let mut st = img_state.borrow_mut();
                 if let Some(ref mut img) = st.current {
-                    add_font_barcodes_to_image(img, &font, &main_barcode_text, &left_barcode_text, bar_height);
+                    add_font_barcodes_to_image(
+                        img,
+                        &font,
+                        &main_barcode_text,
+                        &left_barcode_text,
+                        bar_height,
+                    );
                     if let Some(ref p) = st.path {
                         need_save_path = Some(p.clone());
                     }
@@ -378,6 +386,52 @@ fn main() {
                     redraw_image(&mut f_for_btn, img);
                 }
             }
+        });
+    }
+
+    // -------------------------------
+    // Remove detected barcodes in the current image
+    // -------------------------------
+    {
+        let mut f_for_btn = img_frame.clone();
+        let img_state = Rc::clone(&img_state);
+        let cfg_rc = config.clone();
+
+        clean_btn.set_callback(move |_| {
+            let bar_height = {
+                let cfg = cfg_rc.borrow();
+                cfg.bar_height
+            };
+
+            let mut need_save_path: Option<String> = None;
+            let removed_count = {
+                let mut st = img_state.borrow_mut();
+                if let Some(ref mut img) = st.current {
+                    let removed = whiten_barcodes(img, bar_height);
+                    need_save_path = st.path.clone();
+                    removed
+                } else {
+                    dialog::message_default("Open or select an image first!");
+                    return;
+                }
+            };
+
+            if let Some(path) = need_save_path {
+                let st = img_state.borrow();
+                if let Some(ref img) = st.current {
+                    if let Err(e) = save_tiff_gray(img, &path) {
+                        dialog::message_default(&format!("Failed to save cleaned image:\n{e}"));
+                    }
+                    redraw_image(&mut f_for_btn, img);
+                }
+            }
+
+            let msg = if removed_count == 0 {
+                "No barcode-like regions were found to remove.".to_string()
+            } else {
+                format!("Removed {removed_count} barcode region(s).")
+            };
+            dialog::message_default(&msg);
         });
     }
 
