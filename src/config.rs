@@ -1,3 +1,4 @@
+use std::env;
 use std::path::Path;
 use std::{fs, io};
 
@@ -11,7 +12,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            tiff_dir: String::new(),
+            tiff_dir: default_tiff_dir(),
             csv_path: String::new(),
             bar_height: 200,
         }
@@ -38,6 +39,9 @@ pub fn load_config() -> AppConfig {
             }
         }
     }
+    if cfg.tiff_dir.is_empty() {
+        cfg.tiff_dir = default_tiff_dir();
+    }
     cfg
 }
 
@@ -47,4 +51,42 @@ pub fn save_config(cfg: &AppConfig) -> io::Result<()> {
         cfg.tiff_dir, cfg.csv_path, cfg.bar_height
     );
     fs::write(CONFIG_PATH, data)
+}
+
+fn default_tiff_dir() -> String {
+    let appdata = match env::var("APPDATA") {
+        Ok(val) => val,
+        Err(_) => return String::new(),
+    };
+
+    let base = Path::new(&appdata)
+        .join("ELO Digital Office")
+        .join("MpsELOStaffDocs");
+
+    let Ok(entries) = fs::read_dir(base) else {
+        return String::new();
+    };
+
+    let mut intrays = entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|f| f.is_dir()).unwrap_or(false))
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            if name.chars().all(|c| c.is_ascii_digit()) {
+                let intray_path = entry.path().join("intray");
+                if intray_path.is_dir() {
+                    return Some(intray_path);
+                }
+            }
+            None
+        })
+        .collect::<Vec<_>>();
+
+    intrays.sort();
+    intrays
+        .into_iter()
+        .next()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
