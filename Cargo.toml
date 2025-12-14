@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2024"
 
 [dependencies]
-fltk = "1"
+fltk = { version = "1", features = ["fltk-bundled"] }
 image = { version = "0.24", default-features = false, features = ["tiff", "png", "jpeg"] }
 imageproc = "0.23"
 rusttype = "0.9"
@@ -12,3 +12,7 @@ barcoders = {version = "2.0.0", features = ["image", "ascii", "svg", "json"]}
 csv = "1"
 tiff = {version = "0.10.3", features = ["fax"]}
 fax = "0.2.6"
+zxing-cpp = { version = "0.4.1", features = ["bundled", "image"] }
+
+[build-dependencies]
+embed-resource = "2"

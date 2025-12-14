@@ -1,6 +1,6 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::cell::RefCell;
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -24,7 +24,7 @@ mod image_utils;
 use image_utils::{load_image, redraw_image, save_tiff_gray};
 
 mod barcode;
-use barcode::{add_font_barcodes_to_image, load_barcode_font};
+use barcode::{add_font_barcodes_to_image, clear_barcodes_with_zxingcpp, load_barcode_font};
 
 mod files;
 use files::{populate_file_list, read_config_dir, reload_tiff_list};
@@ -156,8 +156,8 @@ fn main() {
             // simple quit
             print!("help");
             dialog::message_default(
-                "Tips:\n\n 
-                • CTRL+z to undo\n\n 
+                "Tips:\n\n
+                • CTRL+z to undo\n\n
                 • ",
             );
         },
@@ -189,6 +189,7 @@ fn main() {
     btn_row.set_spacing(10);
 
     let mut barcode_btn = Button::new(0, 25, 200, 40, "Add Barcode");
+    let mut clear_btn = Button::new(0, 25, 200, 40, "Clear Barcodes");
     let mut reload_btn = Button::new(0, 25, 200, 40, "Refresh");
 
     let mut type_choice = Choice::new(0, 25, 80, 40, None);
@@ -309,7 +310,7 @@ fn main() {
         let cfg = config.borrow();
         cfg.tiff_dir.clone()
     };
-	
+
     if image_dir.is_empty() {
         dialog::message_default("config.txt missing or empty; defaulting to current directory.");
     }
@@ -319,7 +320,65 @@ fn main() {
     }
 
     // -------------------------------
-    // Barcode button – add + overwrite file
+    // Clear barcodes button - detect + overwrite file
+    // -------------------------------
+    {
+        let mut f_for_clear = img_frame.clone();
+        let img_state = Rc::clone(&img_state);
+        let cfg_for_clear = config.clone();
+
+        clear_btn.set_callback(move |_| {
+            let mut need_save_path: Option<String> = None;
+            let mut cleared = 0usize;
+            let bar_height_hint = {
+                let cfg = cfg_for_clear.borrow();
+                cfg.bar_height
+            };
+
+            {
+                let mut st = img_state.borrow_mut();
+                let img = match st.current.as_mut() {
+                    Some(img) => img,
+                    None => {
+                        dialog::message_default("Open or select an image first!");
+                        return;
+                    }
+                };
+
+                match clear_barcodes_with_zxingcpp(img, bar_height_hint) {
+                    Ok(count) => {
+                        cleared = count;
+                        if let Some(ref p) = st.path {
+                            need_save_path = Some(p.clone());
+                        }
+                    }
+                    Err(e) => {
+                        dialog::message_default(&format!("Failed to clear barcodes:\n{e}"));
+                        return;
+                    }
+                }
+            }
+
+            if cleared == 0 {
+                dialog::message_default("No barcodes detected to clear.");
+                return;
+            }
+
+            if let Some(path) = need_save_path {
+                let st = img_state.borrow();
+                if let Some(ref img) = st.current {
+                    if let Err(e) = save_tiff_gray(img, &path) {
+                        dialog::message_default(&format!("Failed to save cleared image:\n{e}"));
+                        return;
+                    }
+                    redraw_image(&mut f_for_clear, img);
+                }
+            }
+        });
+    }
+
+    // -------------------------------
+    // Barcode button - add + overwrite file
     // -------------------------------
     {
         let mut f_for_btn = img_frame.clone();
@@ -348,16 +407,22 @@ fn main() {
                 }
             };
 
-            //Mutate image in place
+            // Mutate image in place
             let mut need_save_path: Option<String> = None;
-			let bar_height = {
-				let cfg = config.borrow();
-				cfg.bar_height
-			};
+            let bar_height = {
+                let cfg = config.borrow();
+                cfg.bar_height
+            };
             {
                 let mut st = img_state.borrow_mut();
                 if let Some(ref mut img) = st.current {
-                    add_font_barcodes_to_image(img, &font, &main_barcode_text, &left_barcode_text, bar_height);
+                    add_font_barcodes_to_image(
+                        img,
+                        &font,
+                        &main_barcode_text,
+                        &left_barcode_text,
+                        bar_height,
+                    );
                     if let Some(ref p) = st.path {
                         need_save_path = Some(p.clone());
                     }

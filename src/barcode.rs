@@ -1,8 +1,9 @@
 use image::imageops::overlay;
-use image::{DynamicImage, ImageBuffer, Rgba};
+use image::{DynamicImage, ImageBuffer, Rgba, GenericImageView};
 use imageproc::drawing::draw_text_mut;
 use rusttype::{Font, Scale, point};
 use std::fs;
+use zxingcpp::{self, BarcodeFormat, BarcodeFormats};
 
 /// Load the barcode font from disk.
 pub fn load_barcode_font(path: &str) -> Option<Font<'static>> {
@@ -101,4 +102,77 @@ pub fn add_font_barcodes_to_image(
         overlay(&mut base, &left_img, left_x, left_y);
     }
     *img = DynamicImage::ImageRgba8(base);
+}
+
+/// Detect barcodes with zxing-cpp and paint white rectangles over them.
+/// Padding is generous to account for positional jitter in some readers.
+pub fn clear_barcodes_with_zxingcpp(
+    img: &mut DynamicImage,
+    bar_height_hint: u32,
+) -> Result<usize, String> {
+    let luma = img.to_luma8();
+    let (width, height) = luma.dimensions();
+
+    let formats = BarcodeFormats::from(BarcodeFormat::Any);
+    let reader = zxingcpp::read()
+        .formats(formats)
+        .try_invert(true)
+        .try_rotate(true)
+        .try_downscale(true)
+        .max_number_of_symbols(32)
+        .min_line_count(1);
+
+    let results = reader
+        .from(&luma)
+        .map_err(|e| format!("zxing-cpp failed to detect barcodes: {e}"))?;
+
+    if results.is_empty() {
+        return Ok(0);
+    }
+
+    let mut canvas = img.to_rgba8();
+    let mut cleared = 0usize;
+
+    for res in results {
+        let pos = res.position();
+        let xs = [pos.top_left.x, pos.top_right.x, pos.bottom_left.x, pos.bottom_right.x];
+        let ys = [pos.top_left.y, pos.top_right.y, pos.bottom_left.y, pos.bottom_right.y];
+
+        let (min_x, max_x) = xs.iter().fold((i32::MAX, i32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+        let (min_y, max_y) = ys.iter().fold((i32::MAX, i32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+
+        if min_x == i32::MAX || min_y == i32::MAX {
+            continue;
+        }
+
+        let span_x = (max_x - min_x).abs().max(1) as f32;
+        let pad_x = (span_x * 0.25).max(20.0);
+        let span_y = (max_y - min_y).abs().max(1) as f32;
+        let vertical_pad = ((bar_height_hint as f32) * 0.75)
+            .max(span_y * 1.75)
+            .max(24.0);
+
+        let left = (min_x as f32 - pad_x).floor().clamp(0.0, (width.saturating_sub(1)) as f32) as u32;
+        let right = (max_x as f32 + pad_x).ceil().clamp(0.0, (width.saturating_sub(1)) as f32) as u32;
+        let center_y = (min_y + max_y) as f32 / 2.0;
+        let top = (center_y - vertical_pad).floor().clamp(0.0, (height.saturating_sub(1)) as f32) as u32;
+        let bottom = (center_y + vertical_pad).ceil().clamp(0.0, (height.saturating_sub(1)) as f32) as u32;
+
+        if right < left || bottom < top {
+            continue;
+        }
+
+        for y in top..=bottom {
+            for x in left..=right {
+                canvas.put_pixel(x, y, Rgba([255, 255, 255, 255]));
+            }
+        }
+        cleared += 1;
+    }
+
+    if cleared > 0 {
+        *img = DynamicImage::ImageRgba8(canvas);
+    }
+
+    Ok(cleared)
 }

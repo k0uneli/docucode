@@ -1,2 +1,4 @@
 target
 todo
+.zed/settings.json
+build_with_msvc.cmd
