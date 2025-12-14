@@ -8,16 +8,14 @@ use fltk::frame::Frame;
 use fltk::image::RgbImage;
 use fltk::prelude::WidgetExt;
 
-use image::GenericImageView;
 use fax::encoder::Encoder as FaxEncoder;
 use fax::tiff as fax_tiff;
 use fax::{Color as FaxColor, VecWriter};
-use image::io::Reader as ImageReader;
-use image::{
-    DynamicImage, ImageBuffer, ImageError, ImageFormat, ImageResult, Luma, Rgba,
-};
+use image::GenericImageView;
 use image::error::DecodingError;
 use image::imageops::FilterType;
+use image::io::Reader as ImageReader;
+use image::{DynamicImage, ImageBuffer, ImageError, ImageFormat, ImageResult, Luma};
 
 use tiff::decoder::{Decoder, DecodingResult};
 use tiff::{TiffError, TiffFormatError};
@@ -75,12 +73,9 @@ fn load_ccitt_tiff(path: &Path) -> Result<DynamicImage, TiffError> {
 
             if len == pixels {
                 // Standard 8-bit gray
-                let img = ImageBuffer::<Luma<u8>, _>::from_vec(w, h, buf)
-                    .ok_or_else(|| {
-                        TiffError::FormatError(
-                            TiffFormatError::InvalidDimensions(w, h)
-                        )
-                    })?;
+                let img = ImageBuffer::<Luma<u8>, _>::from_vec(w, h, buf).ok_or_else(|| {
+                    TiffError::FormatError(TiffFormatError::InvalidDimensions(w, h))
+                })?;
                 Ok(DynamicImage::ImageLuma8(img))
             } else {
                 // Likely 1-bit-packed bilevel (CCITT/fax style)
@@ -89,11 +84,9 @@ fn load_ccitt_tiff(path: &Path) -> Result<DynamicImage, TiffError> {
 
                 if len != expected {
                     return Err(TiffError::FormatError(
-                        TiffFormatError::CompressedDataCorrupt(
-                            format!(
-                                "unexpected U8 buffer length {len} for {w}x{h} (expected {expected})"
-                            ),
-                        ),
+                        TiffFormatError::CompressedDataCorrupt(format!(
+                            "unexpected U8 buffer length {len} for {w}x{h} (expected {expected})"
+                        )),
                     ));
                 }
 
@@ -115,12 +108,9 @@ fn load_ccitt_tiff(path: &Path) -> Result<DynamicImage, TiffError> {
                     }
                 }
 
-                let img = ImageBuffer::<Luma<u8>, _>::from_vec(w, h, out)
-                    .ok_or_else(|| {
-                        TiffError::FormatError(
-                            TiffFormatError::InvalidDimensions(w, h)
-                        )
-                    })?;
+                let img = ImageBuffer::<Luma<u8>, _>::from_vec(w, h, out).ok_or_else(|| {
+                    TiffError::FormatError(TiffFormatError::InvalidDimensions(w, h))
+                })?;
                 Ok(DynamicImage::ImageLuma8(img))
             }
         }
@@ -133,23 +123,17 @@ fn load_ccitt_tiff(path: &Path) -> Result<DynamicImage, TiffError> {
             }
 
             let img = ImageBuffer::<Luma<u8>, _>::from_vec(w, h, out)
-                .ok_or_else(|| {
-                    TiffError::FormatError(
-                        TiffFormatError::InvalidDimensions(w, h)
-                    )
-                })?;
+                .ok_or_else(|| TiffError::FormatError(TiffFormatError::InvalidDimensions(w, h)))?;
             Ok(DynamicImage::ImageLuma8(img))
         }
 
         other => Err(TiffError::FormatError(
-            TiffFormatError::CompressedDataCorrupt(
-                format!("unsupported TIFF decoding result: {other:?}"),
-            ),
+            TiffFormatError::CompressedDataCorrupt(format!(
+                "unsupported TIFF decoding result: {other:?}"
+            )),
         )),
     }
 }
-
- 
 
 /// Convert DynamicImage → fltk::image::RgbImage
 pub fn dynamic_to_fltk(img: &DynamicImage) -> Option<RgbImage> {
@@ -189,7 +173,13 @@ pub fn save_tiff_gray(img: &DynamicImage, path: &str) -> ImageResult<()> {
     for row in gray.chunks_exact(width as usize) {
         fax_encoder
             .encode_line(
-                row.iter().map(|&v| if v < 128 { FaxColor::Black } else { FaxColor::White }),
+                row.iter().map(|&v| {
+                    if v < 128 {
+                        FaxColor::Black
+                    } else {
+                        FaxColor::White
+                    }
+                }),
                 width as u16,
             )
             .expect("fax encoder for group 4 should be infallible");

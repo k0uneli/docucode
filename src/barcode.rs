@@ -1,5 +1,5 @@
 use image::imageops::overlay;
-use image::{DynamicImage, ImageBuffer, Rgba, GenericImageView};
+use image::{DynamicImage, ImageBuffer, Rgba};
 use imageproc::drawing::draw_text_mut;
 use rusttype::{Font, Scale, point};
 use std::fs;
@@ -21,7 +21,7 @@ pub fn render_text_barcode_image(
         y: target_height as f32,
     };
 
-    let v_metrics = font.v_metrics(scale);
+    let _v_metrics = font.v_metrics(scale);
 
     // baseline so the text fits within the image
     let baseline = target_height as f32;
@@ -77,7 +77,7 @@ pub fn add_font_barcodes_to_image(
     font: &Font<'static>,
     main_text: &str, // e.g. "*EN-MPxxx*"
     left_text: &str, // e.g. "*1*"
-	bar_height: u32
+    bar_height: u32,
 ) {
     let mut base = img.to_rgba8();
     let (w, _h) = base.dimensions();
@@ -135,11 +135,25 @@ pub fn clear_barcodes_with_zxingcpp(
 
     for res in results {
         let pos = res.position();
-        let xs = [pos.top_left.x, pos.top_right.x, pos.bottom_left.x, pos.bottom_right.x];
-        let ys = [pos.top_left.y, pos.top_right.y, pos.bottom_left.y, pos.bottom_right.y];
+        let xs = [
+            pos.top_left.x,
+            pos.top_right.x,
+            pos.bottom_left.x,
+            pos.bottom_right.x,
+        ];
+        let ys = [
+            pos.top_left.y,
+            pos.top_right.y,
+            pos.bottom_left.y,
+            pos.bottom_right.y,
+        ];
 
-        let (min_x, max_x) = xs.iter().fold((i32::MAX, i32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
-        let (min_y, max_y) = ys.iter().fold((i32::MAX, i32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+        let (min_x, max_x) = xs
+            .iter()
+            .fold((i32::MAX, i32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+        let (min_y, max_y) = ys
+            .iter()
+            .fold((i32::MAX, i32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
 
         if min_x == i32::MAX || min_y == i32::MAX {
             continue;
@@ -152,11 +166,19 @@ pub fn clear_barcodes_with_zxingcpp(
             .max(span_y * 1.75)
             .max(24.0);
 
-        let left = (min_x as f32 - pad_x).floor().clamp(0.0, (width.saturating_sub(1)) as f32) as u32;
-        let right = (max_x as f32 + pad_x).ceil().clamp(0.0, (width.saturating_sub(1)) as f32) as u32;
+        let left = (min_x as f32 - pad_x)
+            .floor()
+            .clamp(0.0, (width.saturating_sub(1)) as f32) as u32;
+        let right = (max_x as f32 + pad_x)
+            .ceil()
+            .clamp(0.0, (width.saturating_sub(1)) as f32) as u32;
         let center_y = (min_y + max_y) as f32 / 2.0;
-        let top = (center_y - vertical_pad).floor().clamp(0.0, (height.saturating_sub(1)) as f32) as u32;
-        let bottom = (center_y + vertical_pad).ceil().clamp(0.0, (height.saturating_sub(1)) as f32) as u32;
+        let top = (center_y - vertical_pad)
+            .floor()
+            .clamp(0.0, (height.saturating_sub(1)) as f32) as u32;
+        let bottom = (center_y + vertical_pad)
+            .ceil()
+            .clamp(0.0, (height.saturating_sub(1)) as f32) as u32;
 
         if right < left || bottom < top {
             continue;

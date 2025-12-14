@@ -1,5 +1,3 @@
-use csv::StringRecord;
-
 pub struct Employee {
     pub first: String,
     pub last: String,

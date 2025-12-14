@@ -9,7 +9,7 @@ use fltk::{
     browser::HoldBrowser,
     button::{Button, RadioButton},
     dialog,
-    enums::{Align, CallbackTrigger, Color, Shortcut},
+    enums::{Align, CallbackTrigger, Color, Event, EventState, Key, Shortcut},
     frame::Frame,
     group::{Pack, PackType},
     input::Input,
@@ -27,16 +27,16 @@ mod barcode;
 use barcode::{add_font_barcodes_to_image, clear_barcodes_with_zxingcpp, load_barcode_font};
 
 mod files;
-use files::{populate_file_list, read_config_dir, reload_tiff_list};
+use files::{populate_file_list, reload_tiff_list};
 
 mod config;
-use config::{AppConfig, load_config, save_config};
+use config::load_config;
 
 mod settings;
 use settings::show_settings_dialog;
 
 mod employees;
-use employees::{Employee, load_employees_from_csv};
+use employees::load_employees_from_csv;
 
 struct ImgState {
     original: Option<DynamicImage>, // pristine image when file was first loaded
@@ -384,6 +384,8 @@ fn main() {
         let mut f_for_btn = img_frame.clone();
         let img_state = Rc::clone(&img_state);
         let text_input = text_input.clone();
+        let type_choice_cb = type_choice.clone();
+        let radios_cb = radios.clone();
 
         barcode_btn.set_callback(move |_| {
             // Build barcode contents: *EN-MP<textbox>*
@@ -391,8 +393,8 @@ fn main() {
             let main_barcode_text = format!("*EN-MP{}*", user_text.trim());
 
             // Left barcode *DT-X___*
-            let radio_label = selected_radio(&radios).unwrap_or_else(|| "1".to_string());
-            let document_code = selected_type(&type_choice).unwrap_or_else(|| "E".to_string());
+            let radio_label = selected_radio(&radios_cb).unwrap_or_else(|| "1".to_string());
+            let document_code = selected_type(&type_choice_cb).unwrap_or_else(|| "E".to_string());
             let left_barcode_text = if document_code == "None" {
                 "".to_string()
             } else {
@@ -475,6 +477,93 @@ fn main() {
                     Err(e) => dialog::message_default(&format!("Failed to load image:\n{e}")),
                 }
             }
+        });
+    }
+
+    // Global keyboard shortcuts handled at the window level
+    {
+        let mut file_list_keys = file_list.clone();
+        let mut barcode_btn_keys = barcode_btn.clone();
+        let mut clear_btn_keys = clear_btn.clone();
+        let mut type_choice_keys = type_choice.clone();
+        let mut radios_keys = radios.clone();
+
+        win.handle(move |_, ev| {
+            if ev != Event::KeyDown {
+                return false;
+            }
+
+            let key = app::event_key();
+            let state = app::event_state();
+            let alt = state.contains(EventState::Alt);
+            let ctrl = state.contains(EventState::Ctrl);
+
+            // Down arrow: select next item in the listbox
+            if key == Key::Down {
+                let size = file_list_keys.size();
+                if size > 0 {
+                    let current = file_list_keys.value();
+                    let next = if current <= 0 {
+                        1
+                    } else {
+                        (current + 1).min(size)
+                    };
+                    if next != current {
+                        file_list_keys.select(next);
+                        file_list_keys.do_callback();
+                    }
+                }
+                return true;
+            }
+
+            // Space: add barcode
+            if key == Key::from_char(' ') {
+                barcode_btn_keys.do_callback();
+                return true;
+            }
+
+            // Ctrl+D: clear barcodes
+            if ctrl && (key == Key::from_char('d') || key == Key::from_char('D')) {
+                clear_btn_keys.do_callback();
+                return true;
+            }
+
+            if alt {
+                // Alt+letter: set document type dropdown
+                if let Some(idx) = match key {
+                    k if k == Key::from_char('e') || k == Key::from_char('E') => Some(0),
+                    k if k == Key::from_char('p') || k == Key::from_char('P') => Some(1),
+                    k if k == Key::from_char('d') || k == Key::from_char('D') => Some(2),
+                    k if k == Key::from_char('h') || k == Key::from_char('H') => Some(3),
+                    k if k == Key::from_char('w') || k == Key::from_char('W') => Some(4),
+                    k if k == Key::from_char('t') || k == Key::from_char('T') => Some(5),
+                    k if k == Key::from_char('n') || k == Key::from_char('N') => Some(6),
+                    _ => None,
+                } {
+                    type_choice_keys.set_value(idx);
+                    return true;
+                }
+
+                // Alt+number: set radio buttons (0 maps to "100")
+                if let Some(idx) = match key {
+                    k if k == Key::from_char('1') => Some(0),
+                    k if k == Key::from_char('2') => Some(1),
+                    k if k == Key::from_char('3') => Some(2),
+                    k if k == Key::from_char('4') => Some(3),
+                    k if k == Key::from_char('5') => Some(4),
+                    k if k == Key::from_char('6') => Some(5),
+                    k if k == Key::from_char('7') => Some(6),
+                    k if k == Key::from_char('0') => Some(7),
+                    _ => None,
+                } {
+                    for (i, r) in radios_keys.iter_mut().enumerate() {
+                        r.set_value(i == idx);
+                    }
+                    return true;
+                }
+            }
+
+            false
         });
     }
 
