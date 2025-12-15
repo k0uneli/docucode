@@ -12,6 +12,7 @@ use fltk::{
     enums::{Align, CallbackTrigger, Color, Event, EventState, Key, Shortcut},
     frame::Frame,
     group::{Pack, PackType},
+    image::IcoImage,
     input::Input,
     menu::{Choice, MenuFlag, SysMenuBar},
     prelude::*,
@@ -50,6 +51,9 @@ fn main() {
     let config = Rc::new(RefCell::new(load_config()));
 
     let mut win = Window::new(100, 100, 1280, 1000, "DocuCode");
+    if let Ok(mut icon) = IcoImage::load("icon.ico") {
+        win.set_icon(Some(icon));
+    }
 
     let mut menubar = SysMenuBar::new(0, 0, 1000, 25, "");
 
