@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![windows_subsystem = "windows"]
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -156,9 +156,20 @@ fn main() {
             // simple quit
             print!("help");
             dialog::message_default(
-                "Tips:\n\n
-                • CTRL+z to undo\n\n
-                • ",
+                "Tips & Shortcuts:\n\n\
+Ctrl+O  Open TIFF\n\
+Ctrl+R  Reload list\n\
+Ctrl+S  Settings\n\
+Ctrl+Z  Undo (restore original)\n\
+Ctrl+D  Clear barcodes\n\
+Space   Add barcode\n\
+Down    Select next file\n\
+Alt+E/P/D/H/W/T/N  Set doc type dropdown\n\
+Alt+1..7,0         Set category radio (0 = 100)\n\
+\n\
+Ctrl+Q  Quit\n\
+Ctrl+H  This help\n\
+Ctrl+A  About",
             );
         },
     );
