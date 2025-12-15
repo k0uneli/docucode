@@ -169,7 +169,10 @@ Alt+1..7,0         Set category radio (0 = 100)\n\
 \n\
 Ctrl+Q  Quit\n\
 Ctrl+H  This help\n\
-Ctrl+A  About",
+Ctrl+A  About\n\
+\n\
+To do backlog, leave staff number field empty.\n\
+To just add a staff number barcode, select None in the category dropdown menu.",
             );
         },
     );
@@ -242,10 +245,12 @@ Ctrl+A  About",
     let mut file_list = HoldBrowser::new(0, 0, 220, 380, "");
     file_list.set_frame(fltk::enums::FrameType::DownBox);
 
+    let _staff_label = Frame::new(0, 0, 220, 20, "Staff number:");
     let mut text_input = Input::new(0, 0, 220, 30, "");
     text_input.set_value(""); // empty by default
     text_input.set_frame(fltk::enums::FrameType::DownBox); // makes it clearly visible
     // Staff Lookup
+    let _lookup_label = Frame::new(0, 0, 220, 20, "Staff lookup:");
     let mut search_input = Input::new(0, 0, 220, 30, "");
     let mut results_list = HoldBrowser::new(0, 0, 220, 170, "");
     results_list.set_frame(fltk::enums::FrameType::DownBox);
