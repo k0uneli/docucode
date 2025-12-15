@@ -235,25 +235,26 @@ Ctrl+A  About",
     bottom_row.set_spacing(10);
 
     // Left column: listbox + textbox
-    let mut left_col = Pack::new(0, 0, 220, 720, "");
+    let mut left_col = Pack::new(0, 0, 220, 640, "");
     left_col.set_type(PackType::Vertical);
     left_col.set_spacing(10);
 
-    let mut file_list = HoldBrowser::new(0, 0, 220, 580, "");
+    let mut file_list = HoldBrowser::new(0, 0, 220, 380, "");
     file_list.set_frame(fltk::enums::FrameType::DownBox);
 
     let mut text_input = Input::new(0, 0, 220, 30, "");
     text_input.set_value(""); // empty by default
     text_input.set_frame(fltk::enums::FrameType::DownBox); // makes it clearly visible
     // Staff Lookup
-    let mut search_input = Input::new(0, 0, 220, 25, "");
-    let mut results_list = HoldBrowser::new(0, 0, 220, 150, "");
+    let mut search_input = Input::new(0, 0, 220, 30, "");
+    let mut results_list = HoldBrowser::new(0, 0, 220, 170, "");
     results_list.set_frame(fltk::enums::FrameType::DownBox);
 
     search_input.set_trigger(CallbackTrigger::Changed);
     {
         let cfg_for_search = config.clone();
         let mut results_list_clone = results_list.clone();
+        let mut text_input_clone = text_input.clone();
 
         search_input.set_callback(move |inp| {
             let q = inp.value();
@@ -271,8 +272,27 @@ Ctrl+A  About",
             }
 
             for emp in employees.iter().filter(|e| e.matches_query(&q)) {
-                let line = format!("{} {}, {}", emp.first, emp.last, emp.number);
+                let line = format!("{}, {} ({})", emp.last, emp.first, emp.number);
                 results_list_clone.add(&line);
+            }
+        });
+    }
+
+    // Clicking a search result fills the staff number textbox
+    {
+        let mut text_input_clone = text_input.clone();
+        results_list.set_callback(move |list| {
+            let idx = list.value();
+            if idx <= 0 {
+                return;
+            }
+            if let Some(line) = list.text(idx) {
+                if let (Some(start), Some(end)) = (line.rfind('('), line.rfind(')')) {
+                    if start + 1 < end {
+                        let number = &line[start + 1..end];
+                        text_input_clone.set_value(number.trim());
+                    }
+                }
             }
         });
     }
